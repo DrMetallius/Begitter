@@ -1,0 +1,7 @@
+[package]
+name = "begitter"
+version = "0.1.0"
+authors = ["Alexander Gazarov <unrealrider@gmail.com>"]
+
+[dependencies]
+nom = "^3.2"
