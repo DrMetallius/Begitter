@@ -7,9 +7,13 @@ use std::ops::Range;
 use std::borrow::Cow;
 
 // To get the patch, run "git log --follow -p -1 --format= <file-path>"
-pub fn _parse_patch(input: &[u8]) -> IResult<&[u8], ()> {
-	let (rest, (name, other_name)) = try_parse!(input, parse_header);
-	let patch_parts = try_parse!(rest, patch_part);
+pub fn parse_patch(input: &[u8]) -> IResult<&[u8], ()> {
+	let (body, (name, other_name)) = try_parse!(input, parse_header);
+	let mut rest = body;
+	while !rest.is_empty() {
+		let (unparsed, part) = try_parse!(rest, patch_part);
+		rest = unparsed;
+	}
 	Done(rest, ())
 }
 
@@ -158,7 +162,7 @@ fn matching_name_pair(input: &[u8]) -> IResult<&[u8], (Vec<u8>, Vec<u8>)> {
 		if let Some(name) = trim_to_slash_inclusive(&input[0..separator_start]) {
 			if let Some(other_name) = trim_to_slash_inclusive(&input[separator_end..line_end]) {
 				if name == other_name {
-					return Done(&input[line_end..], (name, other_name));
+					return Done(&input[line_end + 1..], (name, other_name));
 				} else {
 					suitable_non_equal_names = Some((name, other_name));
 				}
@@ -425,5 +429,32 @@ mod test {
 			data: &hunk_data[hunk_data.iter().position(|byte| *byte == b'\n').unwrap() + 1..]
 		};
 		assert_eq!(hunk(hunk_data), Done(&b""[..], expected))
+	}
+
+	#[test]
+	fn test_parse_patch() {
+		let patch_data = br#"diff --git a/gradle.properties b/gradle.properties
+index aac7c9b..f33a6d7 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1,9 +1,3 @@
+-# Project-wide Gradle settings.
+-
+-# IDE (e.g. Android Studio) users:
+-# Gradle settings configured through the IDE *will override*
+-# any settings specified in this file.
+-
+ # For more details on how to configure your build environment visit
+ # http://www.gradle.org/docs/current/userguide/build_environment.html
+
+@@ -14,4 +8,4 @@ org.gradle.jvmargs=-Xmx1536m
+ # When configured, Gradle will run in incubating parallel mode.
+ # This option should only be used with decoupled projects. More details, visit
+ # http://www.gradle.org/docs/current/userguide/multi_project_builds.html#sec:decoupled_projects
+-# org.gradle.parallel=true
++org.gradle.parallel=true
+"#;
+		let result = parse_patch(patch_data);
+		assert_eq!(result, Done(&b""[..], ()));
 	}
 }
