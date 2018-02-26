@@ -58,27 +58,27 @@ struct Hunk<'a> {
 }
 
 named!(
-    parse_header<(Vec<u8>, Vec<u8>)>,
-    do_parse!(
-        tag!(b"diff --git ") >>
-        names: alt!(
-            do_parse!(
-                name: map_opt!(quoted_name, trim_to_slash_inclusive) >>
-                space >>
-                other_name: map_opt!(file_name, trim_to_slash_inclusive) >>
-                line_ending >>
-                (name, other_name)
-            ) |
-            do_parse!(
+	parse_header<(Vec<u8>, Vec<u8>)>,
+	do_parse!(
+		tag!(b"diff --git ") >>
+		names: alt!(
+			do_parse!(
+				name: map_opt!(quoted_name, trim_to_slash_inclusive) >>
+				space >>
+				other_name: map_opt!(file_name, trim_to_slash_inclusive) >>
+				line_ending >>
+				(name, other_name)
+			) |
+			do_parse!(
 				name: map_opt!(map!(take_until!("\""), |name| trim_right(name)), trim_to_slash_inclusive) >>
-                other_name: map_opt!(quoted_name, trim_to_slash_inclusive) >>
-                line_ending >>
-                (name, other_name)
-            ) |
-            matching_name_pair
-        ) >>
-        (names)
-    )
+				other_name: map_opt!(quoted_name, trim_to_slash_inclusive) >>
+				line_ending >>
+				(name, other_name)
+			) |
+			matching_name_pair
+		) >>
+		(names)
+	)
 );
 
 named!(
@@ -87,16 +87,16 @@ named!(
 );
 
 named!(
-    quoted_name<Vec<u8>>,
-    delimited!(tag!(b"\""), unescape, tag!(b"\""))
+	quoted_name<Vec<u8>>,
+	delimited!(tag!(b"\""), unescape, tag!(b"\""))
 );
 
 named!(
-    unescape<Vec<u8>>,
-    escaped_transform!(
-        not_quote_or_backslash,
-        '\\',
-        alt!(
+	unescape<Vec<u8>>,
+	escaped_transform!(
+		not_quote_or_backslash,
+		'\\',
+		alt!(
 			one_of!(r#""\"#) => { |ch| vec![ch as u8] } |
 			tag!("a") => { |_| vec![b'\x07'] } |
 			tag!("b") => { |_| vec![b'\x08'] } |
@@ -105,20 +105,20 @@ named!(
 			tag!("t") => { |_| vec![b'\t'] } |
 			tag!("v") => { |_| vec![b'\x0B'] } |
 			octal_escape => { |byte| vec![byte] }
-       )
-    )
+	   )
+	)
 );
 
 named!(not_quote_or_backslash, is_not!(r#""\"#));
 
 named!(
-    octal_escape<u8>,
-    do_parse!(
-        first_digit: one_of!("0123") >>
-        second_digit: one_of!("01234567") >>
-        third_digit: one_of!("01234567") >>
-        (u8::from_str_radix(&vec![first_digit, second_digit, third_digit].into_iter().collect::<String>(), 8).unwrap())
-    )
+	octal_escape<u8>,
+	do_parse!(
+		first_digit: one_of!("0123") >>
+		second_digit: one_of!("01234567") >>
+		third_digit: one_of!("01234567") >>
+		(u8::from_str_radix(&vec![first_digit, second_digit, third_digit].into_iter().collect::<String>(), 8).unwrap())
+	)
 );
 
 fn trim_to_slash_inclusive<'a, I: Into<Cow<'a, [u8]>>>(input: I) -> Option<Vec<u8>> {
@@ -143,6 +143,7 @@ fn matching_name_pair(input: &[u8]) -> IResult<&[u8], (Vec<u8>, Vec<u8>)> {
 	};
 
 	let mut separator_start = 0;
+	let mut suitable_non_equal_names = None;
 	while separator_start < line_end {
 		if !is_space(input[separator_start]) {
 			separator_start += 1;
@@ -157,7 +158,9 @@ fn matching_name_pair(input: &[u8]) -> IResult<&[u8], (Vec<u8>, Vec<u8>)> {
 		if let Some(name) = trim_to_slash_inclusive(&input[0..separator_start]) {
 			if let Some(other_name) = trim_to_slash_inclusive(&input[separator_end..line_end]) {
 				if name == other_name {
-					return Done(&input[line_end..], (name.clone(), name));
+					return Done(&input[line_end..], (name, other_name));
+				} else {
+					suitable_non_equal_names = Some((name, other_name));
 				}
 			}
 		}
@@ -165,7 +168,10 @@ fn matching_name_pair(input: &[u8]) -> IResult<&[u8], (Vec<u8>, Vec<u8>)> {
 		separator_start = separator_end + 1;
 	}
 
-	Error(ErrorKind::Custom(1)) // TODO: fall back to the first space as the separator
+	if let Some(names) = suitable_non_equal_names {
+		return Done(&input[line_end..], names);
+	}
+	Error(ErrorKind::Custom(1))
 }
 
 named!(
@@ -173,7 +179,7 @@ named!(
 	alt!(
 		map!(hunk, |hunk| PatchPart::Hunk(hunk)) |
 		similarity |
-        name |
+		name |
 		name_change |
 		mode_change |
 		presence_change |
