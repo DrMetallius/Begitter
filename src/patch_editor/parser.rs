@@ -164,7 +164,8 @@ pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
 
 				if let Some(mode_data) = mode {
 					let mode_str = String::from_utf8(mode_data.to_vec())?;
-					update_if_absent(&mut parser.old_mode, mode_str);
+					update_if_absent(&mut parser.old_mode, mode_str.clone());
+					update_if_absent(&mut parser.new_mode, mode_str);
 				}
 			}
 			PatchPart::Similarity(similarity) => {
@@ -178,7 +179,7 @@ pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
 	}
 
 	Ok(Patch {
-		operation: parser.operation.ok_or(ParseError::PartAbsent("Operation"))?,
+		operation: parser.operation.unwrap_or(Operation::Edited),
 		old_properties: FileProperties {
 			name: parser.old_name.ok_or(ParseError::PartAbsent("Old name"))?,
 			mode: parser.old_mode.ok_or(ParseError::PartAbsent("Old mode"))?,
@@ -395,7 +396,7 @@ named!(
 	name<PatchPart<'a>>,
 	do_parse!(
 		order: alt!(value!(Order::Old, tag!("--- ")) | value!(Order::New, tag!("+++ "))) >>
-		name: file_name >>
+		name: map_opt!(file_name, trim_to_slash_inclusive) >>
 		tag!("\n") >>
 		(PatchPart::Name(name, order))
 	)
