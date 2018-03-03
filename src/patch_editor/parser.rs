@@ -190,6 +190,7 @@ pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
 			mode: parser.new_mode.ok_or(ParseError::PartAbsent("New mode"))?,
 			index: parser.new_index.ok_or(ParseError::PartAbsent("New index"))?,
 		},
+		similarity: parser.similarity,
 		hunks: parser.hunks,
 	})
 }
@@ -508,6 +509,7 @@ named!(
 #[cfg(test)]
 mod test {
 	use super::*;
+	use super::super::test_data::*;
 
 	fn match_name(header: &[u8], expected_name: &[u8]) {
 		let (name, other_name) = parse_header(header).to_result().unwrap().unwrap();
@@ -577,63 +579,7 @@ mod test {
 
 	#[test]
 	fn test_parse_patch() {
-		let patch_data = br#"diff --git a/gradle.properties b/gradle.properties
-index aac7c9b..f33a6d7 100644
---- a/gradle.properties
-+++ b/gradle.properties
-@@ -1,9 +1,3 @@
--# Project-wide Gradle settings.
--
--# IDE (e.g. Android Studio) users:
--# Gradle settings configured through the IDE *will override*
--# any settings specified in this file.
--
- # For more details on how to configure your build environment visit
- # http://www.gradle.org/docs/current/userguide/build_environment.html
-
-@@ -14,4 +8,4 @@ org.gradle.jvmargs=-Xmx1536m
- # When configured, Gradle will run in incubating parallel mode.
- # This option should only be used with decoupled projects. More details, visit
- # http://www.gradle.org/docs/current/userguide/multi_project_builds.html#sec:decoupled_projects
--# org.gradle.parallel=true
-+org.gradle.parallel=true
-"#;
-		let result = parse_patch(patch_data).unwrap();
-		assert_eq!(result, Patch {
-			operation: Operation::Edited,
-			old_properties: FileProperties {
-				name: "gradle.properties".into(),
-				mode: "100644".into(),
-				index: "aac7c9b".into(),
-			},
-			new_properties: FileProperties {
-				name: "gradle.properties".into(),
-				mode: "100644".into(),
-				index: "f33a6d7".into(),
-			},
-			hunks: vec![Hunk {
-				old_file_range: 1..10,
-				new_file_range: 1..4,
-				data: br#"-# Project-wide Gradle settings.
--
--# IDE (e.g. Android Studio) users:
--# Gradle settings configured through the IDE *will override*
--# any settings specified in this file.
--
- # For more details on how to configure your build environment visit
- # http://www.gradle.org/docs/current/userguide/build_environment.html
-
-"#,
-			}, Hunk {
-				old_file_range: 14..18,
-				new_file_range: 8..12,
-				data: br#" # When configured, Gradle will run in incubating parallel mode.
- # This option should only be used with decoupled projects. More details, visit
- # http://www.gradle.org/docs/current/userguide/multi_project_builds.html#sec:decoupled_projects
--# org.gradle.parallel=true
-+org.gradle.parallel=true
-"#,
-			}],
-		});
+		let result = parse_patch(&*PATCH_DATA).unwrap();
+		assert_eq!(result, *PATCH);
 	}
 }
