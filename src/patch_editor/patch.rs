@@ -3,34 +3,43 @@ use std::io::Write;
 use std::io::Error;
 use std::borrow::{Borrow, Cow};
 
+const FILE_NAME_PLACEHOLDER: &str = "/dev/null";
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct Patch<'a> {
-	pub operation: Operation,
-	pub old_properties: FileProperties,
-	pub new_properties: FileProperties,
-	pub similarity: Option<u8>,
+	pub change: Change,
 	pub hunks: Vec<Hunk<'a>>,
 }
 
 impl<'a> Patch<'a> {
 	pub fn write<W: Write>(&self, write: &mut W) -> Result<(), Error> {
-		let prefixed_old_name = String::from("a/") + &self.old_properties.name;
+		let prefixed_old_name = match self.change {
+			Change::Addition { .. } => FILE_NAME_PLACEHOLDER.into(),
+			Change::Removal { ref old_properties } | Change::Modification { ref old_properties, .. } => String::from("a/") + &old_properties.name
+		};
 		let prefixed_escaped_old_name = format_name(&prefixed_old_name);
 
-		let prefixed_new_name = String::from("b/") + &self.new_properties.name;
+		let prefixed_new_name = match self.change {
+			Change::Addition { ref new_properties } | Change::Modification { ref new_properties, .. } => String::from("b/") + &new_properties.name,
+			Change::Removal { .. } => FILE_NAME_PLACEHOLDER.into(),
+		};
 		let prefixed_escaped_new_name = format_name(&prefixed_new_name);
 
 		write.write_fmt(format_args!("diff --git {} {}\n", prefixed_escaped_old_name, prefixed_escaped_new_name))?;
 
-		let operation_data = match self.operation {
-			Operation::Edited => None,
-			Operation::Added => Some(format!("new file mode {}\n", self.new_properties.mode)),
-			Operation::Removed => Some(format!("deleted file mode {}\n", self.old_properties.mode)),
-			Operation::Copied => Some(format!("copy from {}\ncopy to {}\n", format_name(&self.old_properties.name),
-				format_name(&self.new_properties.name))),
-			Operation::Renamed => Some(format!("rename from {}\nrename to {}\n", format_name(&self.old_properties.name),
-				format_name(&self.new_properties.name))),
-			Operation::ModeChanged => Some(format!("old mode {}\nnew mode {}\n", self.old_properties.mode, self.new_properties.mode))
+		let operation_data = match self.change {
+			Change::Addition { ref new_properties } => Some(format!("new file mode {}\n", new_properties.mode)),
+			Change::Removal { ref old_properties } => Some(format!("deleted file mode {}\n", old_properties.mode)),
+			Change::Modification { ref modification_type, ref old_properties, ref new_properties } => {
+				match modification_type {
+					&ModificationType::Edited => None,
+					&ModificationType::Copied { .. } => Some(format!("copy from {}\ncopy to {}\n", format_name(&old_properties.name),
+						format_name(&new_properties.name))),
+					&ModificationType::Renamed { .. } => Some(format!("rename from {}\nrename to {}\n", format_name(&old_properties.name),
+						format_name(&new_properties.name))),
+					&ModificationType::ModeChanged => Some(format!("old mode {}\nnew mode {}\n", old_properties.mode, new_properties.mode))
+				}
+			}
 		};
 
 		if let Some(header_line) = operation_data {
@@ -85,6 +94,21 @@ fn format_name(name: &str) -> Cow<str> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub enum Change {
+	Addition {
+		new_properties: FileProperties,
+	},
+	Removal {
+		old_properties: FileProperties,
+	},
+	Modification {
+		modification_type: ModificationType,
+		old_properties: FileProperties,
+		new_properties: FileProperties,
+	},
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct FileProperties {
 	pub name: String,
 	pub mode: String,
@@ -92,11 +116,9 @@ pub struct FileProperties {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum Operation {
-	Added,
-	Removed,
-	Copied,
-	Renamed,
+pub enum ModificationType {
+	Copied { similarity: Option<u8> },
+	Renamed { similarity: Option<u8> },
 	ModeChanged,
 	Edited,
 }
@@ -132,7 +154,6 @@ impl<'a> Hunk<'a> {
 
 #[cfg(test)]
 mod test {
-	use super::*;
 	use super::super::test_data::*;
 
 	#[test]
