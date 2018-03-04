@@ -7,7 +7,7 @@ use std::string::FromUtf8Error;
 use std::num::ParseIntError;
 use std::fmt::Debug;
 
-use super::patch::{Patch, FileProperties, Hunk, Operation};
+use super::patch::{Change, Patch, FileProperties, Hunk, ModificationType};
 
 #[derive(Debug, Eq, PartialEq)]
 enum Order {
@@ -57,7 +57,7 @@ pub enum ParseError {
 	EncodingError(FromUtf8Error),
 	IntValueError(ParseIntError),
 	PartConflict(String),
-	PartAbsent(&'static str)
+	PartAbsent(&'static str),
 }
 
 impl From<IError<u32>> for ParseError {
@@ -111,6 +111,34 @@ struct Parser<'a> {
 	hunks: Vec<Hunk<'a>>,
 }
 
+impl<'a> Parser<'a> {
+	fn old_properties(&self) -> Result<FileProperties, ParseError> {
+		Ok(FileProperties {
+			name: self.old_name.clone().ok_or(ParseError::PartAbsent("Old name"))?,
+			mode: self.old_mode.clone().ok_or(ParseError::PartAbsent("Old mode"))?,
+			index: self.old_index.clone().ok_or(ParseError::PartAbsent("Old index"))?,
+		})
+	}
+
+	fn new_properties(&self) -> Result<FileProperties, ParseError> {
+		Ok(FileProperties {
+			name: self.new_name.clone().ok_or(ParseError::PartAbsent("New name"))?,
+			mode: self.new_mode.clone().ok_or(ParseError::PartAbsent("New mode"))?,
+			index: self.new_index.clone().ok_or(ParseError::PartAbsent("New index"))?,
+		})
+	}
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+enum Operation {
+	Added,
+	Removed,
+	Copied,
+	Renamed,
+	ModeChanged,
+	Edited,
+}
+
 // To get the patch, run "git log --follow -p -1 --format= <file-path>"
 pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
 	let PatchParts { names, parts } = read_patch(input).to_full_result()?;
@@ -157,40 +185,49 @@ pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
 			}
 			PatchPart::Index { old_index, new_index, mode } => {
 				let old_index_str = String::from_utf8(old_index.to_vec())?;
-				update_if_absent(&mut parser.old_index, old_index_str);
+				update_if_absent(&mut parser.old_index, old_index_str)?;
 
 				let new_index_str = String::from_utf8(new_index.to_vec())?;
-				update_if_absent(&mut parser.new_index, new_index_str);
+				update_if_absent(&mut parser.new_index, new_index_str)?;
 
 				if let Some(mode_data) = mode {
 					let mode_str = String::from_utf8(mode_data.to_vec())?;
-					update_if_absent(&mut parser.old_mode, mode_str.clone());
-					update_if_absent(&mut parser.new_mode, mode_str);
+					update_if_absent(&mut parser.old_mode, mode_str.clone())?;
+					update_if_absent(&mut parser.new_mode, mode_str)?;
 				}
 			}
 			PatchPart::Similarity(similarity) => {
-				update_if_absent(&mut parser.similarity, String::from_utf8(similarity.to_vec())?.parse()?);
+				update_if_absent(&mut parser.similarity, String::from_utf8(similarity.to_vec())?.parse()?)?;
 			}
 			PatchPart::Dissimilarity(dissimilarity) => {
-				update_if_absent(&mut parser.similarity, 100 - String::from_utf8(dissimilarity.to_vec())?.parse::<u8>()?);
+				update_if_absent(&mut parser.similarity, 100 - String::from_utf8(dissimilarity.to_vec())?.parse::<u8>()?)?;
 			}
 			PatchPart::Hunk(hunk) => parser.hunks.push(hunk)
 		}
 	}
 
+	let operation = parser.operation.clone().unwrap_or(Operation::Edited);
+
+	let change = match operation {
+		Operation::Added => Change::Addition { new_properties: parser.new_properties()? },
+		Operation::Removed => Change::Removal { old_properties: parser.old_properties()? },
+		other_operation => {
+			Change::Modification {
+				modification_type: match other_operation {
+					Operation::ModeChanged => ModificationType::ModeChanged,
+					Operation::Renamed => ModificationType::Renamed { similarity: parser.similarity },
+					Operation::Copied => ModificationType::Copied { similarity: parser.similarity },
+					Operation::Edited => ModificationType::Edited,
+					_ => panic!("Unhandled operation {:?}", operation)
+				},
+				old_properties: parser.old_properties()?,
+				new_properties: parser.new_properties()?,
+			}
+		}
+	};
+
 	Ok(Patch {
-		operation: parser.operation.unwrap_or(Operation::Edited),
-		old_properties: FileProperties {
-			name: parser.old_name.ok_or(ParseError::PartAbsent("Old name"))?,
-			mode: parser.old_mode.ok_or(ParseError::PartAbsent("Old mode"))?,
-			index: parser.old_index.ok_or(ParseError::PartAbsent("Old index"))?,
-		},
-		new_properties: FileProperties {
-			name: parser.new_name.ok_or(ParseError::PartAbsent("New name"))?,
-			mode: parser.new_mode.ok_or(ParseError::PartAbsent("New mode"))?,
-			index: parser.new_index.ok_or(ParseError::PartAbsent("New index"))?,
-		},
-		similarity: parser.similarity,
+		change,
 		hunks: parser.hunks,
 	})
 }
@@ -562,24 +599,18 @@ mod test {
 
 	#[test]
 	fn test_hunk() {
-		let hunk_data = br#"@@ -14,4 +8,4 @@ org.gradle.jvmargs=-Xmx1536m
- # When configured, Gradle will run in incubating parallel mode.
- # This option should only be used with decoupled projects. More details, visit
- # http://www.gradle.org/docs/current/userguide/multi_project_builds.html#sec:decoupled_projects
--# org.gradle.parallel=true
-+org.gradle.parallel=true
-"#;
-		let expected = Hunk {
-			old_file_range: 14..18,
-			new_file_range: 8..12,
-			data: &hunk_data[hunk_data.iter().position(|byte| *byte == b'\n').unwrap() + 1..],
-		};
-		assert_eq!(hunk(hunk_data), Done(&b""[..], expected))
+		assert_eq!(hunk(&**PATCH_DATA_HUNK_2), Done(&b""[..], generate_hunk_2()));
 	}
 
 	#[test]
 	fn test_parse_patch() {
 		let result = parse_patch(&*PATCH_DATA).unwrap();
 		assert_eq!(result, *PATCH);
+	}
+
+	#[test]
+	fn test_parse_patch_quoted() {
+		let result = parse_patch(PATCH_ADDITION_DATA).unwrap();
+		assert_eq!(result, *PATCH_ADDITION);
 	}
 }
