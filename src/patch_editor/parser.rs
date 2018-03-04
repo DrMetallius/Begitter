@@ -613,4 +613,10 @@ mod test {
 		let result = parse_patch(PATCH_ADDITION_DATA).unwrap();
 		assert_eq!(result, *PATCH_ADDITION);
 	}
+
+	#[test]
+	fn test_parse_patch_overlapping_hunks() {
+		let result = parse_patch(&*PATCH_DATA_OVERLAPPING_HUNKS);
+		assert_eq!(result.is_err(), true);
+	}
 }

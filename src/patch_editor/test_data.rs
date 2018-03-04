@@ -15,6 +15,7 @@ pub const PATCH_DATA_HUNK_1_CONTENTS: &[u8] = br"-# Project-wide Gradle settings
 
 ";
 pub const PATCH_DATA_HUNK_2_HEADER: &[u8] = b"@@ -14,4 +8,4 @@\n";
+pub const PATCH_DATA_HUNK_2_OVERLAPPING_HEADER: &[u8] = b"@@ -8,4 +8,4 @@\n";
 pub const PATCH_DATA_HUNK_2_CONTENTS: &[u8] = br" # When configured, Gradle will run in incubating parallel mode.
  # This option should only be used with decoupled projects. More details, visit
  # http://www.gradle.org/docs/current/userguide/multi_project_builds.html#sec:decoupled_projects
@@ -44,8 +45,13 @@ lazy_static! {
 	pub static ref PATCH_DATA_HUNK_2: Vec<u8> = vec_from_slices![PATCH_DATA_HUNK_2_HEADER, PATCH_DATA_HUNK_2_CONTENTS];
 
 	pub static ref PATCH_DATA: Vec<u8> = generate_patch_data(false);
-
 	pub static ref PATCH_DATA_NO_EXTENDED_HEADER: Vec<u8> = generate_patch_data(true);
+	pub static ref PATCH_DATA_OVERLAPPING_HUNKS: Vec<u8> = vec_from_slices![
+			PATCH_DATA_HEADER,
+			PATCH_DATA_NAMES,
+			&**PATCH_DATA_HUNK_1,
+			PATCH_DATA_HUNK_2_OVERLAPPING_HEADER,
+			PATCH_DATA_HUNK_2_CONTENTS];
 
 	pub static ref PATCH: Patch<'static> = {
 		Patch {
