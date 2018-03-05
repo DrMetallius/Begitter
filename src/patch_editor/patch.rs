@@ -132,6 +132,17 @@ impl<'a> Patch<'a> {
 
 		Ok(())
 	}
+
+	pub fn remove_hunks(&mut self, positions: &[usize]) {
+		let mut sorted_positions = positions.to_vec();
+		sorted_positions.sort_unstable();
+		sorted_positions
+				.into_iter()
+				.rev()
+				.for_each(|position| {
+					self.hunks.remove(position);
+				});
+	}
 }
 
 fn format_name(name: &str) -> Cow<str> {
