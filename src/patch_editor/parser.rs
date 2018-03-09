@@ -504,20 +504,13 @@ fn hunk_data(input: &[u8], old_file_range: Range<usize>, new_file_range: Range<u
 		old_file_lines_left -= old_file_lines_consumed;
 		new_file_lines_left -= new_file_lines_consumed;
 		bytes_consumed_total += bytes_consumed;
-	}
 
-	if rest.len() > 0 {
-		let (_, newline_absence_indicator_length) = try_parse!(rest, opt!( // Check for "\ No newline at end of file"
-			do_parse!(
-				tag!("\\") >>
-				line: take_until!("\n") >>
-				line_ending >>
-				(line.len() + 2)
-			)
-		));
-
-		if let Some(bytes_consumed) = newline_absence_indicator_length {
-			bytes_consumed_total += bytes_consumed;
+		if old_file_lines_left == 0 && old_file_lines_consumed > 0 || new_file_lines_left == 0 && new_file_lines_consumed > 0 {
+			let (new_rest, newline_absence_indicator_length) = try_parse!(rest, no_new_line_marker);
+			if let Some(bytes_consumed) = newline_absence_indicator_length {
+				bytes_consumed_total += bytes_consumed;
+			}
+			rest = new_rest;
 		}
 	}
 
@@ -540,6 +533,20 @@ named!(
 		line: take_until!("\n") >>
 		line_ending >>
 		((lines_consumed_in_both_files, line.len() + 1))
+	)
+);
+
+named!(
+	no_new_line_marker<Option<usize>>,
+	opt!(
+		complete!(
+			do_parse!(
+				tag!("\\") >>
+				line: take_until!("\n") >>
+				line_ending >>
+				(line.len() + 2)
+			)
+		)
 	)
 );
 
@@ -618,5 +625,11 @@ mod test {
 	fn test_parse_patch_overlapping_hunks() {
 		let result = parse_patch(&*PATCH_DATA_OVERLAPPING_HUNKS);
 		assert_eq!(result.is_err(), true);
+	}
+
+	#[test]
+	fn test_parse_patch_no_new_lines() {
+		let result = parse_patch(&*PATCH_DATA_NO_NEW_LINES).unwrap();
+		assert_eq!(result, *PATCH_NO_NEW_LINES);
 	}
 }
