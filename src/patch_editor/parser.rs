@@ -139,10 +139,20 @@ enum Operation {
 	Edited,
 }
 
+pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch<'a>>, ParseError> {
+	let patch_parts_vec = combined_patch(input).to_full_result()?;
+	patch_parts_vec.into_iter()
+			.map(|patch_parts| patch_from_parts(patch_parts))
+			.collect()
+}
+
 // To get the patch, run "git log --follow -p -1 --format= <file-path>"
 pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
-	let PatchParts { names, parts } = read_patch(input).to_full_result()?;
+	let patch_parts = patch(input).to_full_result()?;
+	patch_from_parts(patch_parts)
+}
 
+fn patch_from_parts<'a>(PatchParts { names, parts }: PatchParts<'a>) -> Result<Patch<'a>, ParseError> {
 	let mut parser = Parser {
 		old_name: None,
 		new_name: None,
@@ -232,25 +242,22 @@ pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
 	})
 }
 
-fn read_patch(input: &[u8]) -> IResult<&[u8], PatchParts> {
-	let (unparsed, names) = try_parse!(input, parse_header);
-	let mut rest = unparsed;
-
-	let mut parts: Vec<PatchPart> = Vec::new();
-	while !rest.is_empty() {
-		let (unparsed, part) = try_parse!(rest, patch_part);
-		rest = unparsed;
-		parts.push(part);
-	}
-
-	Done(rest, PatchParts {
-		names,
-		parts,
-	})
-}
+named!(combined_patch<Vec<PatchParts>>, many1!(patch));
 
 named!(
-	parse_header<Option<(Vec<u8>, Vec<u8>)>>,
+	patch<PatchParts>,
+	do_parse!(
+		names: patch_header >>
+		parts: many1!(patch_part) >>
+		(PatchParts {
+			names,
+			parts
+		})
+	)
+);
+
+named!(
+	patch_header<Option<(Vec<u8>, Vec<u8>)>>,
 	do_parse!(
 		tag!(b"diff --git ") >>
 		names: alt!(
@@ -556,13 +563,13 @@ mod test {
 	use super::super::test_data::*;
 
 	fn match_name(header: &[u8], expected_name: &[u8]) {
-		let (name, other_name) = parse_header(header).to_result().unwrap().unwrap();
+		let (name, other_name) = patch_header(header).to_result().unwrap().unwrap();
 		assert_eq!(name, other_name);
 		assert_eq!(name.as_slice(), expected_name);
 	}
 
 	#[test]
-	fn test_parse_header() {
+	fn test_patch_header() {
 		match_name(b"diff --git \"a/gradle.properties\" \"b/gradle.properties\"\n", b"gradle.properties");
 		match_name(b"diff --git \"a/gradle.properties\" b/gradle.properties\n", b"gradle.properties");
 		match_name(b"diff --git a/gradle.properties \"b/gradle.properties\"\n", b"gradle.properties");
@@ -631,5 +638,11 @@ mod test {
 	fn test_parse_patch_no_new_lines() {
 		let result = parse_patch(&*PATCH_DATA_NO_NEW_LINES).unwrap();
 		assert_eq!(result, *PATCH_NO_NEW_LINES);
+	}
+
+	#[test]
+	fn test_parse_combined_patch() {
+		let result = parse_combined_patch(&*COMBINED_PATCH_DATA).unwrap();
+		assert_eq!(result.iter().collect::<Vec<&Patch>>(), *COMBINED_PATCH);
 	}
 }
