@@ -72,6 +72,8 @@ lazy_static! {
 		PATCH_DATA_NO_NEW_LINES_HUNK_CONTENTS
 	];
 
+	pub static ref COMBINED_PATCH_DATA: Vec<u8> = vec_from_slices![&*PATCH_DATA, &*PATCH_DATA_NO_NEW_LINES];
+
 	pub static ref PATCH: Patch<'static> = {
 		Patch {
 			change: Change::Modification {
@@ -122,6 +124,8 @@ lazy_static! {
 			hunks: vec![generate_hunk_no_new_lines()],
 		}
 	};
+
+	pub static ref COMBINED_PATCH: Vec<&'static Patch<'static>> = vec![&*PATCH, &*PATCH_NO_NEW_LINES];
 }
 
 pub fn generate_hunk_1<'a>() -> Hunk<'a> {
