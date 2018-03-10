@@ -33,12 +33,11 @@ impl Git { // TODO: detect detached head, apply patch, move branch
 		}
 	}
 
-	pub fn checkout(&self, commit_spec: &str) -> Result<(), GitError> {
+	pub fn rev_parse(&self, ref_name: &str) -> Result<String, GitError> {
 		let mut command = self.prepare_command();
-		command.args(["checkout", "--force", commit_spec].iter());
-		Git::run_command(&mut command)?;
+		command.args(["rev-parse", ref_name].iter());
 
-		Ok(())
+		Ok(Git::run_command(&mut command)?)
 	}
 
 	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>, GitError> {
@@ -50,6 +49,14 @@ impl Git { // TODO: detect detached head, apply patch, move branch
 		Ok(output_text.split_terminator('\n')
 				.map(|string| string.to_owned())
 				.collect())
+	}
+
+	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<(), GitError> {
+		let mut command = self.prepare_command();
+		command.args(["update-ref", "--no-deref", ref_name, object_sha].iter());
+		Git::run_command(&mut command)?;
+
+		Ok(())
 	}
 
 	pub fn diff_tree(&self, commit_spec: &str) -> Result<String, GitError> {
@@ -91,7 +98,8 @@ mod test {
 		let test_resources_dir = [&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>();
 
 		let git = Git::new(test_resources_dir);
-		git.checkout("reading-tests").unwrap();
+		let target_commit = git.rev_parse("reading-tests").unwrap();
+		git.update_ref("HEAD", &target_commit.trim()).unwrap();
 		git
 	}
 
