@@ -11,7 +11,7 @@ pub struct Git {
 	repo_dir: OsString
 }
 
-impl Git { // TODO: detect detached head, apply patch, move branch
+impl Git { // TODO: apply patch
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
@@ -34,7 +34,8 @@ impl Git { // TODO: detect detached head, apply patch, move branch
 	}
 
 	pub fn rev_parse(&self, ref_name: &str) -> Result<String, GitError> {
-		self.run_command(["rev-parse", ref_name].iter())
+		let result = self.run_command(&["rev-parse", ref_name])?;
+		Ok(result.trim().into())
 	}
 
 	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>, GitError> {
@@ -50,8 +51,17 @@ impl Git { // TODO: detect detached head, apply patch, move branch
 				.collect())
 	}
 
+	pub fn symbolic_ref(&self, ref_name: &str) -> Result<String, GitError> {
+		let result = self.run_command(&["symbolic-ref", "--quiet", ref_name])?;
+		Ok(result.trim().into())
+	}
+
+	pub fn symbolic_ref_update(&self, ref_name: &str, target: &str) -> Result<String, GitError> {
+		self.run_command(&["symbolic-ref", "--quiet", ref_name, target])
+	}
+
 	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<(), GitError> {
-		self.run_command(["update-ref", "--no-deref", ref_name, object_sha].iter())?;
+		self.run_command(&["update-ref", "--no-deref", ref_name, object_sha])?;
 		Ok(())
 	}
 
@@ -91,7 +101,7 @@ mod test {
 
 		let git = Git::new(test_resources_dir);
 		let target_commit = git.rev_parse("reading-tests").unwrap();
-		git.update_ref("HEAD", &target_commit.trim()).unwrap();
+		git.update_ref("HEAD", &target_commit).unwrap();
 		git
 	}
 
@@ -115,6 +125,21 @@ mod test {
 		let git = create_git();
 		let result = git.rev_list("a23b1d79372e28779d364e98e3ca8d42050d4811", false).unwrap();
 		assert_eq!(result, expected);
+	}
+
+	#[test]
+	fn test_symbolic_ref() {
+		let git = create_git();
+
+		let result = git.symbolic_ref("HEAD");
+		match result {
+			Err(GitError::StatusError(Some(1))) => (),
+			other => panic!("Symbolic ref is supposed to exit with status 1 when in a detached head state, was {:?}", other)
+		}
+
+		git.symbolic_ref_update("HEAD", "refs/heads/test-branch").unwrap();
+		assert_eq!("refs/heads/test-branch", git.symbolic_ref("HEAD").unwrap());
+		assert_eq!("6f522f142a4fa563b871796fad4d46f822745cf3", git.rev_parse("HEAD").unwrap());
 	}
 
 	#[test]
