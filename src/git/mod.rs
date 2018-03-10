@@ -70,6 +70,18 @@ impl Git { // TODO: apply patch
 	pub fn diff_tree(&self, commit_spec: &str) -> Result<String> {
 		self.run_command(&["diff-tree", "--no-commit-id", "--find-renames", "-p", "-r", commit_spec])
 	}
+
+	pub fn diff_index_names(&self, commit_spec: &str) -> Result<Vec<String>> {
+		let output_text = self.run_command(&["diff-index", "--cached", "--name-only", commit_spec])?;
+		Ok(output_text.split_terminator('\n')
+				.map(|string| string.to_owned())
+				.collect())
+	}
+
+	pub fn read_tree(&self, commit_spec: &str) -> Result<()> {
+		self.run_command(&["read-tree", commit_spec])?;
+		Ok(())
+	}
 }
 
 #[derive(Debug)]
@@ -142,6 +154,17 @@ mod test {
 		git.symbolic_ref_update("HEAD", "refs/heads/test-branch").unwrap();
 		assert_eq!("refs/heads/test-branch", git.symbolic_ref("HEAD").unwrap());
 		assert_eq!("6f522f142a4fa563b871796fad4d46f822745cf3", git.rev_parse("HEAD").unwrap());
+	}
+
+	#[test]
+	fn test_read_tree() {
+		let git = create_git();
+
+		git.read_tree("refs/heads/test-branch").unwrap();
+		assert!(git.diff_index_names("refs/heads/test-branch").unwrap().is_empty());
+
+		git.read_tree("refs/tags/reading-tests").unwrap();
+		assert!(!git.diff_index_names("refs/heads/test-branch").unwrap().is_empty());
 	}
 
 	#[test]
