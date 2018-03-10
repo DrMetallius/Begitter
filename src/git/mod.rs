@@ -18,14 +18,14 @@ impl Git { // TODO: detect detached head, apply patch, move branch
 		}
 	}
 
-	fn prepare_command(&self) -> Command {
-		let mut command = Command::new(COMMAND);
-		command.arg("-C").arg(&self.repo_dir);
-		command
-	}
+	fn run_command<I, S>(&self, args: I) -> Result<String, GitError>
+		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
+		let output = Command::new(COMMAND)
+				.arg("-C")
+				.arg(&self.repo_dir)
+				.args(args)
+				.output()?;
 
-	fn run_command(command: &mut Command) -> Result<String, GitError> {
-		let output = command.output()?;
 		if !output.status.success() {
 			Err(GitError::StatusError(output.status.code()))
 		} else {
@@ -34,37 +34,29 @@ impl Git { // TODO: detect detached head, apply patch, move branch
 	}
 
 	pub fn rev_parse(&self, ref_name: &str) -> Result<String, GitError> {
-		let mut command = self.prepare_command();
-		command.args(["rev-parse", ref_name].iter());
-
-		Ok(Git::run_command(&mut command)?)
+		self.run_command(["rev-parse", ref_name].iter())
 	}
 
 	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>, GitError> {
-		let mut command = self.prepare_command();
-		command.args(&["rev-list", "--ancestry-path", &(String::from(base_commit_spec) + "..HEAD")]);
-		if merges_only { command.arg("--merges"); }
+		let range = String::from(base_commit_spec) + "..HEAD";
+		let mut args = vec!["rev-list", "--ancestry-path", &range];
+		if merges_only {
+			args.push("--merges");
+		}
 
-		let output_text = Git::run_command(&mut command)?;
+		let output_text = self.run_command(args)?;
 		Ok(output_text.split_terminator('\n')
 				.map(|string| string.to_owned())
 				.collect())
 	}
 
 	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<(), GitError> {
-		let mut command = self.prepare_command();
-		command.args(["update-ref", "--no-deref", ref_name, object_sha].iter());
-		Git::run_command(&mut command)?;
-
+		self.run_command(["update-ref", "--no-deref", ref_name, object_sha].iter())?;
 		Ok(())
 	}
 
 	pub fn diff_tree(&self, commit_spec: &str) -> Result<String, GitError> {
-		let mut command = self.prepare_command();
-		command.args(&["diff-tree", "--no-commit-id", "--find-renames", "-p", "-r", commit_spec]);
-
-		let output_text = Git::run_command(&mut command)?;
-		Ok(output_text)
+		self.run_command(&["diff-tree", "--no-commit-id", "--find-renames", "-p", "-r", commit_spec])
 	}
 }
 
