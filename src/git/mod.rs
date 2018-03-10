@@ -14,7 +14,7 @@ pub struct Git {
 }
 
 // TODO: what happens to untracked files when we do our operations?
-impl Git { // TODO: apply patch, git status --porcelain=v2 for conflicts after apply
+impl Git { // TODO: git status --porcelain=v2 for conflicts after apply, add a way to write commits
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
@@ -62,8 +62,14 @@ impl Git { // TODO: apply patch, git status --porcelain=v2 for conflicts after a
 		Git::read_command_output(output)
 	}
 
-	pub fn rev_parse(&self, ref_name: &str) -> Result<String> { // TODO: replace with a plumbing command
-		let result = self.run_command(&["rev-parse", ref_name])?;
+	pub fn show_ref(&self, ref_name: &str) -> Result<String> {
+		let mut args = vec!["show-ref", "--hash"];
+		if ref_name == "HEAD" {
+			args.push("--head");
+		}
+		args.push(ref_name);
+
+		let result = self.run_command(&args)?;
 		Ok(result.trim().into())
 	}
 
@@ -165,7 +171,7 @@ mod test {
 		let test_resources_dir = [&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>();
 
 		let git = Git::new(test_resources_dir);
-		let target_commit = git.rev_parse("reading-tests").unwrap();
+		let target_commit = git.show_ref("reading-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
 		git
 	}
@@ -204,7 +210,7 @@ mod test {
 
 		git.symbolic_ref_update("HEAD", "refs/heads/test-branch").unwrap();
 		assert_eq!("refs/heads/test-branch", git.symbolic_ref("HEAD").unwrap());
-		assert_eq!("6f522f142a4fa563b871796fad4d46f822745cf3", git.rev_parse("HEAD").unwrap());
+		assert_eq!("6f522f142a4fa563b871796fad4d46f822745cf3", git.show_ref("HEAD").unwrap());
 	}
 
 	#[test]
