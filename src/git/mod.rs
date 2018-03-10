@@ -7,6 +7,8 @@ use std::string::FromUtf8Error;
 
 const COMMAND: &str = "git";
 
+type Result<T> = ::std::result::Result<T, GitError>;
+
 pub struct Git {
 	repo_dir: OsString
 }
@@ -18,7 +20,7 @@ impl Git { // TODO: apply patch
 		}
 	}
 
-	fn run_command<I, S>(&self, args: I) -> Result<String, GitError>
+	fn run_command<I, S>(&self, args: I) -> Result<String>
 		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
 		let output = Command::new(COMMAND)
 				.arg("-C")
@@ -33,12 +35,12 @@ impl Git { // TODO: apply patch
 		}
 	}
 
-	pub fn rev_parse(&self, ref_name: &str) -> Result<String, GitError> {
+	pub fn rev_parse(&self, ref_name: &str) -> Result<String> { // TODO: replace with a plumbing command
 		let result = self.run_command(&["rev-parse", ref_name])?;
 		Ok(result.trim().into())
 	}
 
-	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>, GitError> {
+	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>> {
 		let range = String::from(base_commit_spec) + "..HEAD";
 		let mut args = vec!["rev-list", "--ancestry-path", &range];
 		if merges_only {
@@ -51,21 +53,21 @@ impl Git { // TODO: apply patch
 				.collect())
 	}
 
-	pub fn symbolic_ref(&self, ref_name: &str) -> Result<String, GitError> {
+	pub fn symbolic_ref(&self, ref_name: &str) -> Result<String> {
 		let result = self.run_command(&["symbolic-ref", "--quiet", ref_name])?;
 		Ok(result.trim().into())
 	}
 
-	pub fn symbolic_ref_update(&self, ref_name: &str, target: &str) -> Result<String, GitError> {
+	pub fn symbolic_ref_update(&self, ref_name: &str, target: &str) -> Result<String> {
 		self.run_command(&["symbolic-ref", "--quiet", ref_name, target])
 	}
 
-	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<(), GitError> {
+	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<()> {
 		self.run_command(&["update-ref", "--no-deref", ref_name, object_sha])?;
 		Ok(())
 	}
 
-	pub fn diff_tree(&self, commit_spec: &str) -> Result<String, GitError> {
+	pub fn diff_tree(&self, commit_spec: &str) -> Result<String> {
 		self.run_command(&["diff-tree", "--no-commit-id", "--find-renames", "-p", "-r", commit_spec])
 	}
 }
