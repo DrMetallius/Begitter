@@ -32,7 +32,7 @@ pub struct Patch<'a> {
 	pub hunks: Vec<Hunk<'a>>,
 }
 
-impl<'a> Patch<'a> {
+impl<'a> Patch<'a> { // TODO: check if we actually need to forbid overlapping hunks
 	pub fn new(change: Change, hunks: Vec<Hunk<'a>>) -> Result<Patch, OverlappingHunkError> {
 		let mut sorted_hunks = hunks;
 		sorted_hunks.sort_unstable();

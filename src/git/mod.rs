@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::string::FromUtf8Error;
 
 const COMMAND: &str = "git";
+const STATUS_PORCELAIN_V2_COLUMNS: usize = 11;
 
 type Result<T> = ::std::result::Result<T, GitError>;
 
@@ -14,7 +15,7 @@ pub struct Git {
 }
 
 // TODO: what happens to untracked files when we do our operations?
-impl Git { // TODO: git status --porcelain=v2 for conflicts after apply, add a way to write commits
+impl Git { // TODO: add a way to write commits, check escaped file names, fix test initial state
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
@@ -60,6 +61,21 @@ impl Git { // TODO: git status --porcelain=v2 for conflicts after apply, add a w
 
 		let output = child.wait_with_output()?;
 		Git::read_command_output(output)
+	}
+
+	pub fn status_conflicts(&self) -> Result<Vec<String>> {
+		let output = self.run_command(&["status", "--porcelain=v2"])?;
+		let conflicting_files = output.split_terminator('\n')
+				.filter(|string| string.starts_with("u "))
+				.map(|string| {
+					let mut path = string;
+					for _ in 0..STATUS_PORCELAIN_V2_COLUMNS - 1 {
+						path = &path[path.find(' ').unwrap() + 1..];
+					}
+					path.into()
+				})
+				.collect::<Vec<String>>();
+		Ok(conflicting_files)
 	}
 
 	pub fn show_ref(&self, ref_name: &str) -> Result<String> {
@@ -166,6 +182,17 @@ mod test {
 	use std::thread;
 	use std::time::Duration;
 
+	const PATCH: &[u8] = br"diff --git a/Test file.txt b/Test file.txt
+index 9944a9f..e9459b0 100644
+--- a/Test file.txt
++++ b/Test file.txt
+@@ -1 +1 @@
+-This is a test file
+\ No newline at end of file
++This is just a test file
+\ No newline at end of file
+";
+
 	fn create_git() -> Git {
 		let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
 		let test_resources_dir = [&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>();
@@ -253,21 +280,25 @@ index afe0cb3..9944a9f 100644
 
 	#[test]
 	fn test_apply() {
-		let patch = br"diff --git a/Test file.txt b/Test file.txt
-index 9944a9f..e9459b0 100644
---- a/Test file.txt
-+++ b/Test file.txt
-@@ -1 +1 @@
--This is a test file
-\ No newline at end of file
-+This is just a test file
-\ No newline at end of file
-";
-
 		let git = create_git();
 		git.read_tree("refs/tags/reading-tests").unwrap();
-		git.apply(&patch[..], false).unwrap();
+		git.apply(PATCH, false).unwrap();
 
 		assert!(!git.diff_index_names("refs/tags/reading-tests").unwrap().is_empty());
+	}
+
+	#[test]
+	fn test_status_conflicts() {
+		let git = create_git();
+
+		let target_commit = git.show_ref("conflict-tests").unwrap();
+		git.update_ref("HEAD", &target_commit).unwrap();
+		git.read_tree("refs/tags/conflict-tests").unwrap();
+		git.checkout_index().unwrap();
+
+		let apply_result = git.apply(PATCH, true);
+		assert!(apply_result.is_err());
+
+		assert_eq!(vec!["Test file.txt"], git.status_conflicts().unwrap());
 	}
 }
