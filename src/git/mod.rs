@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::io;
-use std::io::Read;
-use std::process::Stdio;
+use std::io::{Read, Write};
+use std::process::{Output, Stdio};
 use std::ffi::{OsStr, OsString};
 use std::string::FromUtf8Error;
 
@@ -13,26 +13,53 @@ pub struct Git {
 	repo_dir: OsString
 }
 
-impl Git { // TODO: apply patch
+// TODO: what happens to untracked files when we do our operations?
+impl Git { // TODO: apply patch, git status --porcelain=v2 for conflicts after apply
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
 		}
 	}
 
+	fn prepare_command<I, S>(&self, args: I) -> Command
+		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
+		let mut command = Command::new(COMMAND);
+		command.arg("-C")
+			.arg(&self.repo_dir)
+			.args(args);
+		command
+	}
+
+	fn read_command_output(output: Output) -> Result<String> {
+		let message = String::from_utf8(output.stdout);
+		if !output.status.success() {
+			Err(GitError::StatusError(output.status.code(), message.unwrap_or("".into())))
+		} else {
+			Ok(message?)
+		}
+	}
+
 	fn run_command<I, S>(&self, args: I) -> Result<String>
 		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
-		let output = Command::new(COMMAND)
-				.arg("-C")
-				.arg(&self.repo_dir)
-				.args(args)
-				.output()?;
+		let output = self.prepare_command(args).output()?;
+		Git::read_command_output(output)
+	}
 
-		if !output.status.success() {
-			Err(GitError::StatusError(output.status.code()))
-		} else {
-			Ok(String::from_utf8(output.stdout)?)
+	fn run_command_with_stdin<I, S>(&self, args: I, stdin_data: &[u8]) -> Result<String>
+		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
+		let mut child = self.prepare_command(args)
+				.stdin(Stdio::piped())
+				.stdout(Stdio::piped())
+				.stderr(Stdio::piped())
+				.spawn()?;
+
+		{
+			let mut stdin = child.stdin.as_mut();
+			stdin.unwrap().write_all(stdin_data);
 		}
+
+		let output = child.wait_with_output()?;
+		Git::read_command_output(output)
 	}
 
 	pub fn rev_parse(&self, ref_name: &str) -> Result<String> { // TODO: replace with a plumbing command
@@ -68,7 +95,7 @@ impl Git { // TODO: apply patch
 	}
 
 	pub fn diff_tree(&self, commit_spec: &str) -> Result<String> {
-		self.run_command(&["diff-tree", "--no-commit-id", "--find-renames", "-p", "-r", commit_spec])
+		self.run_command(&["diff-tree", "--no-commit-id", "--find-renames", "--patch", "-r", commit_spec])
 	}
 
 	pub fn diff_index_names(&self, commit_spec: &str) -> Result<Vec<String>> {
@@ -82,13 +109,35 @@ impl Git { // TODO: apply patch
 		self.run_command(&["read-tree", commit_spec])?;
 		Ok(())
 	}
+
+	pub fn checkout_index(&self) -> Result<()> {
+		// --index is required for the index to match what's in the working dir
+		self.run_command(&["checkout-index", "--all", "--force", "--index"])?;
+		Ok(())
+	}
+
+	pub fn apply(&self, patch: &[u8], working_tree: bool) -> Result<()> {
+		let mut args = vec!["apply"];
+
+		if working_tree {
+			args.push("--index");
+			args.push("--3way");
+		} else {
+			args.push("--cached");
+		}
+
+		args.push("-");
+
+		self.run_command_with_stdin(args, patch)?;
+		Ok(())
+	}
 }
 
 #[derive(Debug)]
 pub enum GitError {
 	IoError(io::Error),
 	OutputError(FromUtf8Error),
-	StatusError(Option<i32>)
+	StatusError(Option<i32>, String)
 }
 
 impl From<io::Error> for GitError {
@@ -108,6 +157,8 @@ mod test {
 	use super::*;
 	use std::path::PathBuf;
 	use std::env::var;
+	use std::thread;
+	use std::time::Duration;
 
 	fn create_git() -> Git {
 		let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
@@ -147,7 +198,7 @@ mod test {
 
 		let result = git.symbolic_ref("HEAD");
 		match result {
-			Err(GitError::StatusError(Some(1))) => (),
+			Err(GitError::StatusError(Some(1), _)) => (),
 			other => panic!("Symbolic ref is supposed to exit with status 1 when in a detached head state, was {:?}", other)
 		}
 
@@ -192,5 +243,25 @@ index afe0cb3..9944a9f 100644
 		let git = create_git();
 		let result = git.diff_tree("HEAD").unwrap();
 		assert_eq!(result, expected);
+	}
+
+	#[test]
+	fn test_apply() {
+		let patch = br"diff --git a/Test file.txt b/Test file.txt
+index 9944a9f..e9459b0 100644
+--- a/Test file.txt
++++ b/Test file.txt
+@@ -1 +1 @@
+-This is a test file
+\ No newline at end of file
++This is just a test file
+\ No newline at end of file
+";
+
+		let git = create_git();
+		git.read_tree("refs/tags/reading-tests").unwrap();
+		git.apply(&patch[..], false).unwrap();
+
+		assert!(!git.diff_index_names("refs/tags/reading-tests").unwrap().is_empty());
 	}
 }
