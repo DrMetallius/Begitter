@@ -1,6 +1,6 @@
 use std::process::Command;
 use std::io;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::{Output, Stdio};
 use std::ffi::{OsStr, OsString};
 use std::string::FromUtf8Error;
@@ -15,7 +15,7 @@ pub struct Git {
 }
 
 // TODO: what happens to untracked files when we do our operations?
-impl Git { // TODO: add a way to write commits, check escaped file names, fix test initial state
+impl Git { // TODO: check escaped file names, fix test initial state
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
@@ -55,7 +55,7 @@ impl Git { // TODO: add a way to write commits, check escaped file names, fix te
 				.spawn()?;
 
 		{
-			let mut stdin = child.stdin.as_mut();
+			let stdin = child.stdin.as_mut();
 			stdin.unwrap().write_all(stdin_data);
 		}
 
@@ -153,6 +153,27 @@ impl Git { // TODO: add a way to write commits, check escaped file names, fix te
 		self.run_command_with_stdin(args, patch)?;
 		Ok(())
 	}
+
+	pub fn update_index<I, S>(&self, files: I) -> Result<()>
+		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
+		let mut args: Vec<OsString> = vec!["update-index".into(), "--".into()];
+		for ref entry in files {
+			args.push(entry.into());
+		}
+
+		self.run_command(&args)?;
+		Ok(())
+	}
+
+	pub fn write_tree(&self) -> Result<String> {
+		let tree = self.run_command(&["write-tree"])?;
+		Ok(tree.trim().into())
+	}
+
+	pub fn commit_tree(&self, tree: &str, parent: &str, message: &str) -> Result<String> {
+		let commit = self.run_command(&["commit-tree", tree, "-p", parent, "-m", message])?;
+		Ok(commit.trim().into())
+	}
 }
 
 #[derive(Debug)]
@@ -179,8 +200,7 @@ mod test {
 	use super::*;
 	use std::path::PathBuf;
 	use std::env::var;
-	use std::thread;
-	use std::time::Duration;
+	use std::fs::File;
 
 	const PATCH: &[u8] = br"diff --git a/Test file.txt b/Test file.txt
 index 9944a9f..e9459b0 100644
@@ -193,14 +213,28 @@ index 9944a9f..e9459b0 100644
 \ No newline at end of file
 ";
 
-	fn create_git() -> Git {
+	fn get_repository_path() -> PathBuf {
 		let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
-		let test_resources_dir = [&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>();
+		[&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>()
+	}
 
+	fn create_git() -> Git {
+		let test_resources_dir = get_repository_path();
 		let git = Git::new(test_resources_dir);
+
 		let target_commit = git.show_ref("reading-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
 		git
+	}
+
+	fn apply_patch_with_conflicts(git: &Git) {
+		let target_commit = git.show_ref("conflict-tests").unwrap();
+		git.update_ref("HEAD", &target_commit).unwrap();
+		git.read_tree("refs/tags/conflict-tests").unwrap();
+		git.checkout_index().unwrap();
+
+		let apply_result = git.apply(PATCH, true);
+		assert!(apply_result.is_err());
 	}
 
 	#[test]
@@ -290,15 +324,37 @@ index afe0cb3..9944a9f 100644
 	#[test]
 	fn test_status_conflicts() {
 		let git = create_git();
+		apply_patch_with_conflicts(&git);
+
+		assert_eq!(vec!["Test file.txt"], git.status_conflicts().unwrap());
+	}
+
+	#[test]
+	fn test_update_index() {
+		let git = create_git();
+		apply_patch_with_conflicts(&git);
+
+		let mut test_file_path = get_repository_path();
+		test_file_path.push("Test file.txt");
+
+		{
+			let mut file = File::create(test_file_path,).unwrap();
+			file.write_all(b"This is just a test file\n").unwrap();
+		};
+
+		git.update_index(&["Test file.txt"]).unwrap();
+		assert_eq!(<Vec<String>>::new(), git.status_conflicts().unwrap());
+	}
+
+	#[test]
+	fn test_write_tree_and_commit() {
+		let git = create_git();
 
 		let target_commit = git.show_ref("conflict-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
 		git.read_tree("refs/tags/conflict-tests").unwrap();
-		git.checkout_index().unwrap();
 
-		let apply_result = git.apply(PATCH, true);
-		assert!(apply_result.is_err());
-
-		assert_eq!(vec!["Test file.txt"], git.status_conflicts().unwrap());
+		let tree = git.write_tree().unwrap();
+		git.commit_tree(&tree, &target_commit, "Test commit").unwrap();
 	}
 }
