@@ -7,3 +7,4 @@ extern crate lazy_static;
 
 mod patch_editor;
 mod git;
+mod parsing_utils;

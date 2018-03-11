@@ -1,4 +1,4 @@
-use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, not_line_ending, space, Needed};
+use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, space, Needed};
 use nom::{IResult, IError};
 use nom::IResult::{Done, Incomplete};
 use std::ops::Range;
@@ -8,6 +8,7 @@ use std::num::ParseIntError;
 use std::fmt::Debug;
 
 use super::patch::{Change, Patch, FileProperties, Hunk, ModificationType};
+use super::super::parsing_utils::{file_name, quoted_name};
 
 #[derive(Debug, Eq, PartialEq)]
 enum Order {
@@ -277,46 +278,6 @@ named!(
 			matching_name_pair
 		) >>
 		(names)
-	)
-);
-
-named!(
-	file_name<Vec<u8>>,
-	alt!(quoted_name | map!(not_line_ending, |slice| slice.into()))
-);
-
-named!(
-	quoted_name<Vec<u8>>,
-	delimited!(tag!(b"\""), unescape, tag!(b"\""))
-);
-
-named!(
-	unescape<Vec<u8>>,
-	escaped_transform!(
-		not_quote_or_backslash,
-		'\\',
-		alt!(
-			one_of!(r#""\"#) => { |ch| vec![ch as u8] } |
-			tag!("a") => { |_| vec![b'\x07'] } |
-			tag!("b") => { |_| vec![b'\x08'] } |
-			tag!("n") => { |_| vec![b'\n'] } |
-			tag!("r") => { |_| vec![b'\r'] } |
-			tag!("t") => { |_| vec![b'\t'] } |
-			tag!("v") => { |_| vec![b'\x0B'] } |
-			octal_escape => { |byte| vec![byte] }
-	   )
-	)
-);
-
-named!(not_quote_or_backslash, is_not!(r#""\"#));
-
-named!(
-	octal_escape<u8>,
-	do_parse!(
-		first_digit: one_of!("0123") >>
-		second_digit: one_of!("01234567") >>
-		third_digit: one_of!("01234567") >>
-		(u8::from_str_radix(&vec![first_digit, second_digit, third_digit].into_iter().collect::<String>(), 8).unwrap())
 	)
 );
 

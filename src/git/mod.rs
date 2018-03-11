@@ -1,9 +1,12 @@
+use nom::ErrorKind;
 use std::process::Command;
 use std::io;
 use std::io::Write;
 use std::process::{Output, Stdio};
 use std::ffi::{OsStr, OsString};
 use std::string::FromUtf8Error;
+
+use super::parsing_utils::file_name;
 
 const COMMAND: &str = "git";
 const STATUS_PORCELAIN_V2_COLUMNS: usize = 11;
@@ -15,7 +18,7 @@ pub struct Git {
 }
 
 // TODO: what happens to untracked files when we do our operations?
-impl Git { // TODO: check escaped file names, fix test initial state
+impl Git { // TODO: fix test initial state
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
@@ -56,11 +59,18 @@ impl Git { // TODO: check escaped file names, fix test initial state
 
 		{
 			let stdin = child.stdin.as_mut();
-			stdin.unwrap().write_all(stdin_data);
+			stdin.unwrap().write_all(stdin_data)?;
 		}
 
 		let output = child.wait_with_output()?;
 		Git::read_command_output(output)
+	}
+
+	fn parse_name(name_data: &[u8]) -> Result<String> {
+		match file_name(name_data).to_result() {
+			Ok(data) => String::from_utf8(data).map_err(|err| err.into()),
+			Err(cause) => Err(cause.into())
+		}
 	}
 
 	pub fn status_conflicts(&self) -> Result<Vec<String>> {
@@ -68,13 +78,14 @@ impl Git { // TODO: check escaped file names, fix test initial state
 		let conflicting_files = output.split_terminator('\n')
 				.filter(|string| string.starts_with("u "))
 				.map(|string| {
-					let mut path = string;
+					let mut name = string;
 					for _ in 0..STATUS_PORCELAIN_V2_COLUMNS - 1 {
-						path = &path[path.find(' ').unwrap() + 1..];
+						name = &name[name.find(' ').unwrap() + 1..];
 					}
-					path.into()
+
+					Git::parse_name(name.as_bytes())
 				})
-				.collect::<Vec<String>>();
+				.collect::<Result<Vec<String>>>()?;
 		Ok(conflicting_files)
 	}
 
@@ -122,9 +133,9 @@ impl Git { // TODO: check escaped file names, fix test initial state
 
 	pub fn diff_index_names(&self, commit_spec: &str) -> Result<Vec<String>> {
 		let output_text = self.run_command(&["diff-index", "--cached", "--name-only", commit_spec])?;
-		Ok(output_text.split_terminator('\n')
-				.map(|string| string.to_owned())
-				.collect())
+		output_text.split_terminator('\n')
+				.map(|string| Git::parse_name(string.as_bytes()))
+				.collect()
 	}
 
 	pub fn read_tree(&self, commit_spec: &str) -> Result<()> {
@@ -180,6 +191,7 @@ impl Git { // TODO: check escaped file names, fix test initial state
 pub enum GitError {
 	IoError(io::Error),
 	OutputError(FromUtf8Error),
+	ParsingError(ErrorKind),
 	StatusError(Option<i32>, String)
 }
 
@@ -192,6 +204,12 @@ impl From<io::Error> for GitError {
 impl From<FromUtf8Error> for GitError {
 	fn from(error: FromUtf8Error) -> Self {
 		GitError::OutputError(error)
+	}
+}
+
+impl From<ErrorKind> for GitError {
+	fn from(error: ErrorKind) -> Self {
+		GitError::ParsingError(error)
 	}
 }
 
