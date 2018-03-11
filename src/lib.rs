@@ -5,6 +5,9 @@ extern crate nom;
 #[macro_use]
 extern crate lazy_static;
 
+#[cfg(test)]
+extern crate tempdir;
+
 mod patch_editor;
 mod git;
 mod parsing_utils;

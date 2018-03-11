@@ -9,3 +9,4 @@ nom = "^3.2"
 [dev-dependencies]
 lazy_static = "^1.0"
 regex = "^0.2"
+tempdir = "^0.3"
