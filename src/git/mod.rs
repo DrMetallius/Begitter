@@ -17,8 +17,7 @@ pub struct Git {
 	repo_dir: OsString
 }
 
-// TODO: what happens to untracked files when we do our operations?
-impl Git { // TODO: fix test initial state
+impl Git {
 	pub fn new<S: AsRef<OsStr>>(repo_dir: S) -> Git {
 		Git {
 			repo_dir: repo_dir.as_ref().to_owned()
@@ -216,9 +215,10 @@ impl From<ErrorKind> for GitError {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use std::path::PathBuf;
+	use std::path::{Path, PathBuf};
 	use std::env::var;
-	use std::fs::File;
+	use std::fs::{copy, create_dir, File, read_dir};
+	use tempdir::TempDir;
 
 	const PATCH: &[u8] = br"diff --git a/Test file.txt b/Test file.txt
 index 9944a9f..e9459b0 100644
@@ -231,18 +231,37 @@ index 9944a9f..e9459b0 100644
 \ No newline at end of file
 ";
 
-	fn get_repository_path() -> PathBuf {
-		let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
-		[&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>()
+	fn copy_dir<P: AsRef<Path>, Q: AsRef<Path>>(source: P, destination: Q) {
+		for entry in read_dir(source).unwrap() {
+			let entry = entry.unwrap();
+			let path = entry.path();
+
+			let mut new_destination = PathBuf::from(destination.as_ref());
+			new_destination.push(path.file_name().unwrap());
+
+			if path.is_dir() {
+				create_dir(&new_destination);
+				copy_dir(path, new_destination);
+			} else {
+				copy(path, new_destination).unwrap();
+			}
+		}
 	}
 
-	fn create_git() -> Git {
-		let test_resources_dir = get_repository_path();
-		let git = Git::new(test_resources_dir);
+	fn create_git() -> (Git, TempDir) {
+		let temp_dir = TempDir::new("begitter").unwrap();
+
+		let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
+		let test_resources_dir = [&manifest_dir, "resources", "tests"].iter().collect::<PathBuf>();
+
+		copy_dir(test_resources_dir, temp_dir.path());
+
+		let git = Git::new(temp_dir.path());
 
 		let target_commit = git.show_ref("reading-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
-		git
+		
+		(git, temp_dir)
 	}
 
 	fn apply_patch_with_conflicts(git: &Git) {
@@ -257,7 +276,7 @@ index 9944a9f..e9459b0 100644
 
 	#[test]
 	fn test_rev_list_merges_only() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 		let result = git.rev_list("a23b1d79372e28779d364e98e3ca8d42050d4811", true).unwrap();
 		assert_eq!(result, vec!["951534891c74c587db9f233763f5604724fa726f"]);
 	}
@@ -272,14 +291,14 @@ index 9944a9f..e9459b0 100644
 			"5b91d82043422d52dbe3fcd04b64a074af57675c",
 			"96b7f6e6ad54bd54efc1a82bcd1c8dcdac63056d"];
 
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 		let result = git.rev_list("a23b1d79372e28779d364e98e3ca8d42050d4811", false).unwrap();
 		assert_eq!(result, expected);
 	}
 
 	#[test]
 	fn test_symbolic_ref() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 
 		let result = git.symbolic_ref("HEAD");
 		match result {
@@ -294,7 +313,7 @@ index 9944a9f..e9459b0 100644
 
 	#[test]
 	fn test_read_tree() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 
 		git.read_tree("refs/heads/test-branch").unwrap();
 		assert!(git.diff_index_names("refs/heads/test-branch").unwrap().is_empty());
@@ -325,14 +344,14 @@ index afe0cb3..9944a9f 100644
 \\ No newline at end of file
 "[..];
 
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 		let result = git.diff_tree("HEAD").unwrap();
 		assert_eq!(result, expected);
 	}
 
 	#[test]
 	fn test_apply() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 		git.read_tree("refs/tags/reading-tests").unwrap();
 		git.apply(PATCH, false).unwrap();
 
@@ -341,7 +360,7 @@ index afe0cb3..9944a9f 100644
 
 	#[test]
 	fn test_status_conflicts() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 		apply_patch_with_conflicts(&git);
 
 		assert_eq!(vec!["Test file.txt"], git.status_conflicts().unwrap());
@@ -349,10 +368,10 @@ index afe0cb3..9944a9f 100644
 
 	#[test]
 	fn test_update_index() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 		apply_patch_with_conflicts(&git);
 
-		let mut test_file_path = get_repository_path();
+		let mut test_file_path = temp_dir.path().to_owned();
 		test_file_path.push("Test file.txt");
 
 		{
@@ -366,7 +385,7 @@ index afe0cb3..9944a9f 100644
 
 	#[test]
 	fn test_write_tree_and_commit() {
-		let git = create_git();
+		let (git, temp_dir) = create_git();
 
 		let target_commit = git.show_ref("conflict-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
