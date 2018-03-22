@@ -1,3 +1,15 @@
+#![windows_subsystem = "windows"]
+#![feature(trace_macros)]
+
 extern crate begitter;
 
-fn main() {}
+#[cfg(windows)]
+extern crate winapi;
+#[cfg(windows)]
+extern crate libc;
+
+mod ui;
+
+fn main() {
+	ui::windows::run().unwrap();
+}
