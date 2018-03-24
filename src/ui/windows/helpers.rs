@@ -71,10 +71,10 @@ macro_rules! try_get {
 }
 
 macro_rules! try_call {
-	($($call:ident).+($($args:expr),*)) => {
+	($($call:ident).+($($args:expr),*), $error_value:expr) => {
 		unsafe {
 			let result = $($call).*($($args),*);
-			if result == 0 {
+			if result == $error_value {
 				return ::std::result::Result::Err(GetLastError());
 			}
 			result

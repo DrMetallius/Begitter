@@ -48,7 +48,7 @@ pub fn run() -> Result<(), u32> {
 		lpszClassName: class_name.as_ptr(),
 	};
 
-	try_call!(RegisterClassW(&wnd));
+	try_call!(RegisterClassW(&wnd), 0);
 
 	let h_wnd_window = try_get!(CreateWindowExW(0, class_name.as_ptr(), to_wstring(WINDOW_NAME).as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE,
 		0, 0, 500, 500, 0 as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -69,17 +69,15 @@ pub fn run() -> Result<(), u32> {
 	};
 
 	loop {
-		try_call!(GetMessageW(&mut msg, 0 as HWND, 0, 0));
+		let result = try_call!(GetMessageW(&mut msg, 0 as HWND, 0, 0), -1);
+		if result == 0 {
+			break;
+		}
 
-		match msg.message {
-			winuser::WM_QUIT => break,
-			_ => {
-				unsafe {
-					if TranslateAcceleratorW(h_wnd_window, accelerators, &mut msg) == 0 {
-						TranslateMessage(&mut msg);
-						DispatchMessageW(&mut msg);
-					}
-				}
+		unsafe {
+			if TranslateAcceleratorW(h_wnd_window, accelerators, &mut msg) == 0 {
+				TranslateMessage(&mut msg);
+				DispatchMessageW(&mut msg);
 			}
 		}
 	}
