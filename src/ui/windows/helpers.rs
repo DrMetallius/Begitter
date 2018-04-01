@@ -8,6 +8,11 @@ use winapi::shared::ntdef::PWSTR;
 use winapi::um::combaseapi::CoTaskMemFree;
 use winapi::um::unknwnbase::IUnknown;
 use libc::wcslen;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::result::Result::Ok;
+use std::fmt;
 
 macro_rules! try_com {
 	($($call:ident).+($($args:tt)*)) => {
@@ -52,7 +57,7 @@ macro_rules! try_com {
 		unsafe {
 			let result = $($call)*($($parsed_args)*);
 			if result != S_OK {
-				return ::std::result::Result::Err(result)
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(result as u64))
 			}
 		}
 	};
@@ -63,7 +68,7 @@ macro_rules! try_get {
 		unsafe {
 			let result = $($call).*($($args),*);
 			if result.is_null() {
-				return ::std::result::Result::Err(GetLastError());
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(GetLastError() as u64));
 			}
 			result
 		}
@@ -75,8 +80,27 @@ macro_rules! try_call {
 		unsafe {
 			let result = $($call).*($($args),*);
 			if result == $error_value {
-				return ::std::result::Result::Err(GetLastError());
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(GetLastError() as u64));
 			}
+			result
+		}
+	};
+}
+
+macro_rules! try_send_message {
+	($($args:expr),*) => {
+		unsafe {
+			::winapi::um::winuser::SendMessageW($($args),*);
+		}
+	};
+	($($args:expr),*; $($error_value:expr),*) => {
+		unsafe {
+			let result = ::winapi::um::winuser::SendMessageW($($args),*);
+			$(
+				if result == $error_value {
+					return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(result as u64));
+				}
+			)*
 			result
 		}
 	};
@@ -90,7 +114,7 @@ pub fn to_wstring(string: &str) -> Vec<u16> {
 
 pub fn from_wstring(string: PWSTR) -> String {
 	let string_slice = unsafe {
-		let mut len = wcslen(string);
+		let len = wcslen(string);
 		slice::from_raw_parts(string, len)
 	};
 
@@ -182,5 +206,30 @@ impl<T> DerefMut for ComMemPtr<T> {
 		unsafe {
 			self.ptr.as_mut().unwrap()
 		}
+	}
+}
+
+#[derive(Debug)]
+pub struct WinApiError(pub u64);
+
+impl Display for WinApiError {
+	fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+		write!(f, "Win API error code {}", self.0)
+	}
+}
+
+impl Error for WinApiError {
+	fn description(&self) -> &str {
+		"Win API error"
+	}
+
+	fn cause(&self) -> Option<&Error> {
+		None
+	}
+}
+
+impl From<isize> for WinApiError {
+	fn from(code: isize) -> WinApiError {
+		WinApiError(code as u64)
 	}
 }

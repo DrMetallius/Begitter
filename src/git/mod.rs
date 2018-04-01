@@ -9,6 +9,12 @@ use std::string::FromUtf8Error;
 use super::parsing_utils::file_name;
 use std::vec::Vec;
 
+#[cfg(windows)]
+use {
+	std::os::windows::process::CommandExt,
+	winapi::um::winbase::CREATE_NO_WINDOW
+};
+
 const COMMAND: &str = "git";
 const STATUS_PORCELAIN_V2_COLUMNS: usize = 11;
 
@@ -31,6 +37,9 @@ impl Git {
 		command.arg("-C")
 			.arg(&self.repo_dir)
 			.args(args);
+		if cfg!(windows) {
+			command.creation_flags(CREATE_NO_WINDOW);
+		}
 		command
 	}
 
@@ -111,11 +120,20 @@ impl Git {
 		}
 	}
 
-	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>> {
-		let range = String::from(base_commit_spec) + "..HEAD";
-		let mut args = vec!["rev-list", "--ancestry-path", &range];
+	pub fn rev_list(&self, base_commit_spec: Option<&str>, merges_only: bool) -> Result<Vec<String>> {
+		let range;
+		let mut args = vec!["rev-list"];
 		if merges_only {
 			args.push("--merges");
+		}
+
+		match base_commit_spec {
+			Some(base_commit_spec) => {
+				range = String::from(base_commit_spec) + "..HEAD";
+				args.push("--ancestry-path");
+				args.push(&range);
+			},
+			None => args.push("HEAD")
 		}
 
 		let output_text = self.run_command(args)?;
@@ -289,7 +307,7 @@ index 9944a9f..e9459b0 100644
 	#[test]
 	fn test_rev_list_merges_only() {
 		let (git, temp_dir) = create_git();
-		let result = git.rev_list("a23b1d79372e28779d364e98e3ca8d42050d4811", true).unwrap();
+		let result = git.rev_list(Some("a23b1d79372e28779d364e98e3ca8d42050d4811"), true).unwrap();
 		assert_eq!(result, vec!["951534891c74c587db9f233763f5604724fa726f"]);
 	}
 
@@ -304,7 +322,7 @@ index 9944a9f..e9459b0 100644
 			"96b7f6e6ad54bd54efc1a82bcd1c8dcdac63056d"];
 
 		let (git, temp_dir) = create_git();
-		let result = git.rev_list("a23b1d79372e28779d364e98e3ca8d42050d4811", false).unwrap();
+		let result = git.rev_list(Some("a23b1d79372e28779d364e98e3ca8d42050d4811"), false).unwrap();
 		assert_eq!(result, expected);
 	}
 
