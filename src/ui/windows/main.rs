@@ -17,7 +17,8 @@ use winapi::um::processthreadsapi::GetCurrentThreadId;
 use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
 use winapi::um::winnt::WCHAR;
-use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW, IDI_APPLICATION, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage, PostThreadMessageW, PostMessageW, RegisterClassW, ShowWindow, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE};
+use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW, LB_RESETCONTENT, IDI_APPLICATION, LB_ADDSTRING, LBS_NOTIFY, LB_GETCOUNT, LB_DELETESTRING, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage, SendMessageW, PostThreadMessageW, PostMessageW, RegisterClassW, ShowWindow, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL};
+use std::error::Error;
 
 const MAIN_CLASS: &str = "main";
 
@@ -25,6 +26,7 @@ const MAIN_MENU: &str = "main_menu";
 const MAIN_ACCELERATORS: &str = "main_accelerators";
 
 const ID_MENU_OPEN: WORD = 100;
+const ID_CHILD_BRANCHES_LIST: HMENU = 200 as HMENU;
 
 const MESSAGE_OPEN_FOLDER: UINT = WM_APP;
 const MESSAGE_MAIN_VIEW: UINT = WM_APP + 1;
@@ -36,7 +38,7 @@ const GUID_FILE_DIALOG: GUID = GUID {
 	Data4: [0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7],
 };
 
-pub fn run() -> Result<(), u32> {
+pub fn run() -> Result<(), WinApiError> {
 	let main_menu = to_wstring(MAIN_MENU);
 	let class_name = to_wstring(MAIN_CLASS);
 	let wnd = WNDCLASSW {
@@ -57,13 +59,21 @@ pub fn run() -> Result<(), u32> {
 	let h_wnd_window = try_get!(CreateWindowExW(0, class_name.as_ptr(), to_wstring(WINDOW_NAME).as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE,
 		0, 0, 500, 500, 0 as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
+	let branches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+		0, 0, 200, 200, h_wnd_window as HWND, ID_CHILD_BRANCHES_LIST as HMENU, 0 as HINSTANCE, null_mut()));
+
+	let commits_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+		210, 0, 200, 200, h_wnd_window as HWND, ID_CHILD_BRANCHES_LIST as HMENU, 0 as HINSTANCE, null_mut()));
+
 	unsafe {
 		ShowWindow(h_wnd_window, SW_SHOWDEFAULT);
 	}
 
-	let main_view = Arc::new(MainViewImpl {
+	let main_view_relay = Arc::new(MainViewRelay {
 		main_thread_id: unsafe { GetCurrentThreadId() }
 	});
+
+	let mut main_view = MainViewImpl::new(branches_list_box, commits_list_box);
 
 	let mut main_model: Option<MainModel> = None;
 
@@ -89,9 +99,10 @@ pub fn run() -> Result<(), u32> {
 				let dir = unsafe {
 					*Box::from_raw(msg.lParam as *mut String)
 				};
-				main_model = Some(MainModel::new(main_view.clone(), dir))
-			},
-			MESSAGE_MAIN_VIEW => main_view.receive_on_main_thread(&msg),
+
+				main_model = Some(MainModel::new(main_view_relay.clone(), dir))
+			}
+			MESSAGE_MAIN_VIEW => main_view.receive_on_main_thread(&msg)?,
 			_ => ()
 		}
 
@@ -138,7 +149,7 @@ pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_pa
 	}
 }
 
-fn show_open_file_dialog(owner: HWND) -> Result<String, HRESULT> {
+fn show_open_file_dialog(owner: HWND) -> Result<String, WinApiError> {
 	try_com!(CoCreateInstance(&GUID_FILE_DIALOG,
 		null_mut(),
 		CLSCTX_INPROC_SERVER,
@@ -154,45 +165,84 @@ fn show_open_file_dialog(owner: HWND) -> Result<String, HRESULT> {
 	Ok(from_wstring(&mut *display_name as *mut _))
 }
 
-struct MainViewImpl {
+struct MainViewRelay {
 	main_thread_id: DWORD
 }
 
-impl MainViewImpl {
-	fn post_on_main_thread(&self, message: MainViewMessage) -> Result<(), DWORD> {
+impl MainViewRelay {
+	fn post_on_main_thread(&self, message: MainViewMessage) -> Result<(), WinApiError> {
 		let message = Box::new(message);
 		try_call!(PostThreadMessageW(self.main_thread_id, MESSAGE_MAIN_VIEW, 0, Box::into_raw(message) as LPARAM), 0);
 		Ok(())
 	}
-
-	fn receive_on_main_thread(&self, message: &MSG) {
-		debug_assert_eq!(message.message, MESSAGE_MAIN_VIEW);
-		let arguments = unsafe {
-			Box::from_raw(message.lParam as *mut _)
-		};
-
-		match *arguments {
-			MainViewMessage::Branches(ref branches, ref active_branch) => {
-				println!("Branches: {:?}, active: {}", branches, active_branch)
-			}
-		}
-	}
 }
 
 enum MainViewMessage {
-	Branches(Vec<String>, String)
+	Branches(Vec<String>, String),
+	Commits(Vec<String>),
 }
 
-impl MainView for MainViewImpl {
+impl MainView for MainViewRelay {
 	fn error(&self) {}
 
-	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), DWORD> {
-		self.post_on_main_thread(MainViewMessage::Branches(branches, active_branch))
+	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), Box<Error>> {
+		self.post_on_main_thread(MainViewMessage::Branches(branches, active_branch)).map_err(|err| err.into())
 	}
 
-	fn show_commits(&self, commits: &[String]) {}
+	fn show_commits(&self, commits: Vec<String>) -> Result<(), Box<Error>> {
+		self.post_on_main_thread(MainViewMessage::Commits(commits)).map_err(|err| err.into())
+	}
 
 	fn show_edited_commits(&self, commits: &[String]) {}
 
 	fn show_patches(&self, commits: &[String]) {}
+}
+
+struct MainViewImpl {
+	branches_list_box: HWND,
+	commits_list_box: HWND,
+
+	branches: Vec<String>,
+	active_branch: Option<String>,
+	commits: Vec<String>,
+}
+
+impl MainViewImpl {
+	fn new(branches_list_box: HWND, commits_list_box: HWND) -> MainViewImpl {
+		MainViewImpl {
+			branches_list_box,
+			commits_list_box,
+			branches: Vec::new(),
+			active_branch: None,
+			commits: Vec::new(),
+		}
+	}
+
+	fn receive_on_main_thread(&mut self, message: &MSG) -> Result<(), WinApiError> {
+		debug_assert_eq!(message.message, MESSAGE_MAIN_VIEW);
+		let mut arguments = unsafe {
+			*Box::from_raw(message.lParam as *mut _)
+		};
+
+		match arguments {
+			MainViewMessage::Branches(branches, active_branch) => {
+				self.branches = branches;
+
+				try_send_message!(self.branches_list_box, LB_RESETCONTENT, 0, 0);
+				for branch_name in &self.branches {
+					try_send_message!(self.branches_list_box, LB_ADDSTRING, 0, to_wstring(&branch_name).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
+				}
+			}
+			MainViewMessage::Commits(commits) => {
+				self.commits = commits;
+
+				try_send_message!(self.commits_list_box, LB_RESETCONTENT, 0, 0);
+				for commit in &self.commits {
+					try_send_message!(self.commits_list_box, LB_ADDSTRING, 0, to_wstring(&commit).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
+				}
+			}
+		}
+
+		Ok(())
+	}
 }

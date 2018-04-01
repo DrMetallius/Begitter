@@ -6,6 +6,7 @@ use std::thread;
 use std::sync;
 use std::sync::Arc;
 use std::ffi::OsString;
+use std::error::Error;
 
 enum Command {
 	GetBranches
@@ -49,6 +50,10 @@ impl MainModel {
 				let refs = git.show_refs_heads()?;
 				let active = git.symbolic_ref("HEAD")?;
 				view.show_branches(refs, active);
+
+				let merges = git.rev_list(None, true)?;
+				let commits = git.rev_list(if merges.is_empty() { None } else { Some(&merges[0]) }, false)?;
+				view.show_commits(commits);
 			}
 		}
 		Ok(())
@@ -58,8 +63,8 @@ impl MainModel {
 pub trait MainView: Sync + Send {
 	// TODO: add some sensible errors
 	fn error(&self);
-	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), DWORD>;
-	fn show_commits(&self, commits: &[String]);
+	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), Box<Error>>;
+	fn show_commits(&self, commits: Vec<String>) -> Result<(), Box<Error>>;
 	fn show_edited_commits(&self, commits: &[String]);
 	fn show_patches(&self, commits: &[String]);
 }
