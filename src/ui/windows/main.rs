@@ -1,22 +1,23 @@
-use winapi::shared::ntdef::HRESULT;
-use winapi::shared::minwindef::{LRESULT, HINSTANCE, UINT, WPARAM, LPARAM, DWORD, LOWORD, WORD};
-use winapi::shared::windef::{POINT, HBRUSH, HMENU, HWND};
+use std::ptr::null_mut;
+use std::sync::Arc;
+use super::helpers::*;
+use ui::model::main::MainModel;
+use ui::model::main::MainView;
+use ui::text::WINDOW_NAME;
+use winapi::Interface;
 use winapi::shared::guiddef::GUID;
+use winapi::shared::minwindef::{DWORD, HINSTANCE, LOWORD, LPARAM, LRESULT, UINT, WORD, WPARAM};
+use winapi::shared::ntdef::HRESULT;
+use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT};
 use winapi::shared::winerror::S_OK;
 use winapi::shared::wtypesbase::CLSCTX_INPROC_SERVER;
-use winapi::Interface;
+use winapi::um::combaseapi::CoCreateInstance;
 use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::processthreadsapi::GetCurrentThreadId;
 use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
-use winapi::um::combaseapi::CoCreateInstance;
 use winapi::um::winnt::WCHAR;
-use winapi::um::winuser;
-use winapi::um::winuser::{SW_SHOWNORMAL, PostQuitMessage, LoadAcceleratorsW, TranslateAcceleratorW, MSG, WS_VISIBLE, WS_OVERLAPPEDWINDOW, WNDCLASSW, GetMessageW, TranslateMessage, DispatchMessageW, RegisterClassW, ShowWindow, DefWindowProcW, LoadIconW, LoadCursorW, IDI_APPLICATION, IDC_ARROW, CreateWindowExW};
-
-use std::ptr::null_mut;
-
-use ui::text::WINDOW_NAME;
-use super::helpers::*;
+use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW, IDI_APPLICATION, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage, PostThreadMessageW, PostMessageW, RegisterClassW, ShowWindow, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE};
 
 const MAIN_CLASS: &str = "main";
 
@@ -24,6 +25,9 @@ const MAIN_MENU: &str = "main_menu";
 const MAIN_ACCELERATORS: &str = "main_accelerators";
 
 const ID_MENU_OPEN: WORD = 100;
+
+const MESSAGE_OPEN_FOLDER: UINT = WM_APP;
+const MESSAGE_MAIN_VIEW: UINT = WM_APP + 1;
 
 const GUID_FILE_DIALOG: GUID = GUID {
 	Data1: 0xdc1c5a9c,
@@ -54,8 +58,14 @@ pub fn run() -> Result<(), u32> {
 		0, 0, 500, 500, 0 as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
 	unsafe {
-		ShowWindow(h_wnd_window, SW_SHOWNORMAL);
+		ShowWindow(h_wnd_window, SW_SHOWDEFAULT);
 	}
+
+	let main_view = Arc::new(MainViewImpl {
+		main_thread_id: unsafe { GetCurrentThreadId() }
+	});
+
+	let mut main_model: Option<MainModel> = None;
 
 	let accelerators = try_get!(LoadAcceleratorsW(null_mut(), to_wstring(MAIN_ACCELERATORS).as_ptr()));
 
@@ -72,6 +82,17 @@ pub fn run() -> Result<(), u32> {
 		let result = try_call!(GetMessageW(&mut msg, 0 as HWND, 0, 0), -1);
 		if result == 0 {
 			break;
+		}
+
+		match msg.message {
+			MESSAGE_OPEN_FOLDER => {
+				let dir = unsafe {
+					*Box::from_raw(msg.lParam as *mut String)
+				};
+				main_model = Some(MainModel::new(main_view.clone(), dir))
+			},
+			MESSAGE_MAIN_VIEW => main_view.receive_on_main_thread(&msg),
+			_ => ()
 		}
 
 		unsafe {
@@ -95,7 +116,11 @@ pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_pa
 		winuser::WM_COMMAND => {
 			match LOWORD(w_param as u32) {
 				ID_MENU_OPEN => {
-					show_open_file_dialog(h_wnd);
+					if let Ok(dir) = show_open_file_dialog(h_wnd) {
+						unsafe {
+							PostMessageW(h_wnd, MESSAGE_OPEN_FOLDER, 0, Box::into_raw(Box::new(dir)) as LPARAM);
+						}
+					}
 					Some(0)
 				}
 				_ => None
@@ -113,7 +138,7 @@ pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_pa
 	}
 }
 
-fn show_open_file_dialog(owner: HWND) -> Result<(), HRESULT> {
+fn show_open_file_dialog(owner: HWND) -> Result<String, HRESULT> {
 	try_com!(CoCreateInstance(&GUID_FILE_DIALOG,
 		null_mut(),
 		CLSCTX_INPROC_SERVER,
@@ -126,7 +151,48 @@ fn show_open_file_dialog(owner: HWND) -> Result<(), HRESULT> {
 	try_com!(file_dialog.GetResult(com_out dialog_result: IShellItem));
 
 	try_com!(dialog_result.GetDisplayName(SIGDN_FILESYSPATH, com_mem_out display_name: WCHAR));
-	println!("Got display name: {}", from_wstring(&mut *display_name as *mut _));
+	Ok(from_wstring(&mut *display_name as *mut _))
+}
 
-	Ok(())
+struct MainViewImpl {
+	main_thread_id: DWORD
+}
+
+impl MainViewImpl {
+	fn post_on_main_thread(&self, message: MainViewMessage) -> Result<(), DWORD> {
+		let message = Box::new(message);
+		try_call!(PostThreadMessageW(self.main_thread_id, MESSAGE_MAIN_VIEW, 0, Box::into_raw(message) as LPARAM), 0);
+		Ok(())
+	}
+
+	fn receive_on_main_thread(&self, message: &MSG) {
+		debug_assert_eq!(message.message, MESSAGE_MAIN_VIEW);
+		let arguments = unsafe {
+			Box::from_raw(message.lParam as *mut _)
+		};
+
+		match *arguments {
+			MainViewMessage::Branches(ref branches, ref active_branch) => {
+				println!("Branches: {:?}, active: {}", branches, active_branch)
+			}
+		}
+	}
+}
+
+enum MainViewMessage {
+	Branches(Vec<String>, String)
+}
+
+impl MainView for MainViewImpl {
+	fn error(&self) {}
+
+	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), DWORD> {
+		self.post_on_main_thread(MainViewMessage::Branches(branches, active_branch))
+	}
+
+	fn show_commits(&self, commits: &[String]) {}
+
+	fn show_edited_commits(&self, commits: &[String]) {}
+
+	fn show_patches(&self, commits: &[String]) {}
 }

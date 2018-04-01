@@ -7,11 +7,12 @@ use std::ffi::{OsStr, OsString};
 use std::string::FromUtf8Error;
 
 use super::parsing_utils::file_name;
+use std::vec::Vec;
 
 const COMMAND: &str = "git";
 const STATUS_PORCELAIN_V2_COLUMNS: usize = 11;
 
-type Result<T> = ::std::result::Result<T, GitError>;
+pub type Result<T> = ::std::result::Result<T, GitError>;
 
 pub struct Git {
 	repo_dir: OsString
@@ -97,6 +98,17 @@ impl Git {
 
 		let result = self.run_command(&args)?;
 		Ok(result.trim().into())
+	}
+
+	pub fn show_refs_heads(&self) -> Result<Vec<String>> {
+		let result = self.run_command(["show-ref", "--heads"].into_iter())?;
+		let heads_opt = result.split_terminator('\n')
+				.map(|line| line.split(' ').nth(1).map(|string| string.into()))
+				.collect::<Option<Vec<_>>>();
+		match heads_opt {
+			Some(heads) => Ok(heads),
+			None => Err(GitError::from(ErrorKind::Custom(0)))
+		}
 	}
 
 	pub fn rev_list(&self, base_commit_spec: &str, merges_only: bool) -> Result<Vec<String>> {

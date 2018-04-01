@@ -8,6 +8,6 @@ extern crate lazy_static;
 #[cfg(test)]
 extern crate tempdir;
 
-mod patch_editor;
-mod git;
+pub mod patch_editor;
+pub mod git;
 mod parsing_utils;
