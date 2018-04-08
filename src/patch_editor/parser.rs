@@ -52,12 +52,17 @@ struct PatchParts<'a> {
 	parts: Vec<PatchPart<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Fail, Debug)]
 pub enum ParseError {
+	#[fail(display = "Unable to read the patch: {:?}", _0)]
 	LexerError(IError<u32>),
+	#[fail(display = "Error when parsing Unicode input: {}", _0)]
 	EncodingError(FromUtf8Error),
+	#[fail(display = "Error when parsing an int value: {}", _0)]
 	IntValueError(ParseIntError),
+	#[fail(display = "{}", _0)]
 	PartConflict(String),
+	#[fail(display = "Absent part error: {}", _0)]
 	PartAbsent(&'static str),
 }
 

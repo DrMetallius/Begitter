@@ -216,11 +216,15 @@ impl Git {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Fail, Debug)]
 pub enum GitError {
+	#[fail(display = "I/O error: {}", _0)]
 	IoError(io::Error),
-	OutputError(FromUtf8Error),
+	#[fail(display = "Error when parsing Unicode input: {}", _0)]
+	EncodingError(FromUtf8Error),
+	#[fail(display = "Error when parsing the patch data: {}", _0)]
 	ParsingError(ErrorKind),
+	#[fail(display = "Git failure, status {:?}: {}", _0, _1)]
 	StatusError(Option<i32>, String)
 }
 
@@ -232,7 +236,7 @@ impl From<io::Error> for GitError {
 
 impl From<FromUtf8Error> for GitError {
 	fn from(error: FromUtf8Error) -> Self {
-		GitError::OutputError(error)
+		GitError::EncodingError(error)
 	}
 }
 
