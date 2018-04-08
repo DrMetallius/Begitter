@@ -209,24 +209,9 @@ impl<T> DerefMut for ComMemPtr<T> {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Fail, Debug)]
+#[fail(display = "Win API call failed, error {}", _0)]
 pub struct WinApiError(pub u64);
-
-impl Display for WinApiError {
-	fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-		write!(f, "Win API error code {}", self.0)
-	}
-}
-
-impl Error for WinApiError {
-	fn description(&self) -> &str {
-		"Win API error"
-	}
-
-	fn cause(&self) -> Option<&Error> {
-		None
-	}
-}
 
 impl From<isize> for WinApiError {
 	fn from(code: isize) -> WinApiError {

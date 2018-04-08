@@ -1,6 +1,8 @@
 #![windows_subsystem = "windows"]
 
 extern crate begitter;
+#[macro_use]
+extern crate failure;
 #[cfg(windows)]
 extern crate libc;
 #[cfg(windows)]

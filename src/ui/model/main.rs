@@ -7,6 +7,7 @@ use std::sync;
 use std::sync::Arc;
 use std::ffi::OsString;
 use std::error::Error;
+use failure;
 
 enum Command {
 	GetBranches
@@ -35,7 +36,7 @@ impl MainModel {
 				};
 				let result = MainModel::perform_command(&*view_ref, &mut git, command);
 				if let Err(error) = result {
-					view.error();
+					view.error(error);
 				}
 			}
 		});
@@ -44,7 +45,7 @@ impl MainModel {
 		model
 	}
 
-	fn perform_command(view: &MainView, git: &mut Git, command: Command) -> git::Result<()> {
+	fn perform_command(view: &MainView, git: &mut Git, command: Command) -> Result<(), failure::Error> {
 		match command {
 			Command::GetBranches => {
 				let refs = git.show_refs_heads()?;
@@ -62,9 +63,9 @@ impl MainModel {
 
 pub trait MainView: Sync + Send {
 	// TODO: add some sensible errors
-	fn error(&self);
-	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), Box<Error>>;
-	fn show_commits(&self, commits: Vec<String>) -> Result<(), Box<Error>>;
+	fn error(&self, error: failure::Error);
+	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), failure::Error>;
+	fn show_commits(&self, commits: Vec<String>) -> Result<(), failure::Error>;
 	fn show_edited_commits(&self, commits: &[String]);
 	fn show_patches(&self, commits: &[String]);
 }

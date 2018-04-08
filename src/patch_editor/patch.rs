@@ -24,6 +24,8 @@ fn check_overlaps(hunks: &[Hunk], other_hunks: &[Hunk]) -> bool {
 	return false;
 }
 
+#[derive(Fail, Debug)]
+#[fail(display = "Some hunks are overlapping")]
 pub struct OverlappingHunkError;
 
 #[derive(Debug, Eq, PartialEq)]

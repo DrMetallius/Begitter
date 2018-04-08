@@ -1,5 +1,7 @@
+use std::error::Error;
 use std::ptr::null_mut;
 use std::sync::Arc;
+use failure;
 use super::helpers::*;
 use ui::model::main::MainModel;
 use ui::model::main::MainView;
@@ -18,7 +20,6 @@ use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
 use winapi::um::winnt::WCHAR;
 use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW, LB_RESETCONTENT, IDI_APPLICATION, LB_ADDSTRING, LBS_NOTIFY, LB_GETCOUNT, LB_DELETESTRING, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage, SendMessageW, PostThreadMessageW, PostMessageW, RegisterClassW, ShowWindow, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL};
-use std::error::Error;
 
 const MAIN_CLASS: &str = "main";
 
@@ -183,13 +184,13 @@ enum MainViewMessage {
 }
 
 impl MainView for MainViewRelay {
-	fn error(&self) {}
+	fn error(&self, error: failure::Error) {}
 
-	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), Box<Error>> {
+	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::Branches(branches, active_branch)).map_err(|err| err.into())
 	}
 
-	fn show_commits(&self, commits: Vec<String>) -> Result<(), Box<Error>> {
+	fn show_commits(&self, commits: Vec<String>) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::Commits(commits)).map_err(|err| err.into())
 	}
 
