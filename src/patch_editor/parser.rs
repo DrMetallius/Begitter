@@ -44,7 +44,7 @@ enum PatchPart<'a> {
 		new_index: &'a [u8],
 		mode: Option<&'a [u8]>,
 	},
-	Hunk(Hunk<'a>),
+	Hunk(Hunk),
 }
 
 struct PatchParts<'a> {
@@ -105,7 +105,7 @@ fn update_if_absent<T: PartialEq + Debug>(value_ref: &mut Option<T>, value: T) -
 	Ok(())
 }
 
-struct Parser<'a> {
+struct Parser {
 	old_name: Option<String>,
 	new_name: Option<String>,
 	operation: Option<Operation>,
@@ -114,10 +114,10 @@ struct Parser<'a> {
 	old_index: Option<String>,
 	new_index: Option<String>,
 	similarity: Option<u8>,
-	hunks: Vec<Hunk<'a>>,
+	hunks: Vec<Hunk>,
 }
 
-impl<'a> Parser<'a> {
+impl Parser {
 	fn old_properties(&self) -> Result<FileProperties, ParseError> {
 		Ok(FileProperties {
 			name: self.old_name.clone().ok_or(ParseError::PartAbsent("Old name"))?,
@@ -145,7 +145,7 @@ enum Operation {
 	Edited,
 }
 
-pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch<'a>>, ParseError> {
+pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch>, ParseError> {
 	let patch_parts_vec = combined_patch(input).to_full_result()?;
 	patch_parts_vec.into_iter()
 			.map(|patch_parts| patch_from_parts(patch_parts))
@@ -153,12 +153,12 @@ pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch<'a>>, Parse
 }
 
 // To get the patch, run "git log --follow -p -1 --format= <file-path>"
-pub fn parse_patch<'a>(input: &'a [u8]) -> Result<Patch<'a>, ParseError> {
+pub fn parse_patch(input: &[u8]) -> Result<Patch, ParseError> {
 	let patch_parts = patch(input).to_full_result()?;
 	patch_from_parts(patch_parts)
 }
 
-fn patch_from_parts<'a>(PatchParts { names, parts }: PatchParts<'a>) -> Result<Patch<'a>, ParseError> {
+fn patch_from_parts<'a>(PatchParts { names, parts }: PatchParts<'a>) -> Result<Patch, ParseError> {
 	let mut parser = Parser {
 		old_name: None,
 		new_name: None,
@@ -490,7 +490,7 @@ fn hunk_data(input: &[u8], old_file_range: Range<usize>, new_file_range: Range<u
 	Done(&input[bytes_consumed_total..], Hunk {
 		old_file_range,
 		new_file_range,
-		data: &input[..bytes_consumed_total],
+		data: input[..bytes_consumed_total].into(),
 	})
 }
 
