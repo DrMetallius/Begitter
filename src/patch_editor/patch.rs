@@ -29,13 +29,13 @@ fn check_overlaps(hunks: &[Hunk], other_hunks: &[Hunk]) -> bool {
 pub struct OverlappingHunkError;
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct Patch<'a> {
+pub struct Patch {
 	pub change: Change,
-	pub hunks: Vec<Hunk<'a>>,
+	pub hunks: Vec<Hunk>,
 }
 
-impl<'a> Patch<'a> { // TODO: check if we actually need to forbid overlapping hunks
-	pub fn new(change: Change, hunks: Vec<Hunk<'a>>) -> Result<Patch, OverlappingHunkError> {
+impl Patch { // TODO: check if we actually need to forbid overlapping hunks
+	pub fn new(change: Change, hunks: Vec<Hunk>) -> Result<Patch, OverlappingHunkError> {
 		let mut sorted_hunks = hunks;
 		sorted_hunks.sort_unstable();
 
@@ -124,7 +124,7 @@ impl<'a> Patch<'a> { // TODO: check if we actually need to forbid overlapping hu
 		}
 	}
 
-	pub fn move_hunks_to(&'a mut self, positions: &[usize], patch: &mut Patch<'a>) -> Result<(), OverlappingHunkError> {
+	pub fn move_hunks_to(&mut self, positions: &[usize], patch: &mut Patch) -> Result<(), OverlappingHunkError> {
 		let mut hunks = self.move_out_hunks(positions);
 
 		if check_overlaps(&hunks, &patch.hunks) { return Err(OverlappingHunkError); }
@@ -214,10 +214,10 @@ pub enum ModificationType {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct Hunk<'a> {
+pub struct Hunk {
 	pub old_file_range: Range<usize>,
 	pub new_file_range: Range<usize>,
-	pub data: &'a [u8],
+	pub data: Vec<u8>,
 }
 
 fn range_to_str(range: &Range<usize>) -> String {
@@ -229,26 +229,26 @@ fn range_to_str(range: &Range<usize>) -> String {
 	}
 }
 
-impl<'a> Hunk<'a> {
+impl Hunk {
 	fn write<W: Write>(&self, write: &mut W) -> Result<(), Error> {
 		let old_file_range_str = range_to_str(&self.old_file_range);
 		let new_file_range_str = range_to_str(&self.new_file_range);
 		let header = format!("@@ -{} +{} @@\n", old_file_range_str, new_file_range_str);
 
 		write.write_all(header.as_bytes())?;
-		write.write_all(self.data)?;
+		write.write_all(&self.data)?;
 
 		Ok(())
 	}
 }
 
-impl<'a> PartialOrd for Hunk<'a> {
-	fn partial_cmp(&self, other: &Hunk<'a>) -> Option<Ordering> {
+impl PartialOrd for Hunk {
+	fn partial_cmp(&self, other: &Hunk) -> Option<Ordering> {
 		Some(self.old_file_range.start.cmp(&other.old_file_range.start))
 	}
 }
 
-impl<'a> Ord for Hunk<'a> {
+impl<'a> Ord for Hunk {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self.old_file_range.start.cmp(&other.old_file_range.start)
 	}

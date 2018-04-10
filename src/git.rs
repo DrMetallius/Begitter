@@ -82,6 +82,10 @@ impl Git {
 		}
 	}
 
+	pub fn cat_file(&self, spec: &str) -> Result<String> {
+		self.run_command(&["cat-file", "-p", spec])
+	}
+
 	pub fn status_conflicts(&self) -> Result<Vec<String>> {
 		let output = self.run_command(&["status", "--porcelain=v2"])?;
 		let conflicting_files = output.split_terminator('\n')
@@ -210,7 +214,7 @@ impl Git {
 		Ok(tree.trim().into())
 	}
 
-	pub fn commit_tree(&self, tree: &str, parent: &str, message: &str) -> Result<String> {
+	pub fn commit_tree(&self, tree: &str, parent: &str, message: &str) -> Result<String> { // TODO: add author and committer
 		let commit = self.run_command(&["commit-tree", tree, "-p", parent, "-m", message])?;
 		Ok(commit.trim().into())
 	}

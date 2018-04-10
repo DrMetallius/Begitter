@@ -74,7 +74,7 @@ lazy_static! {
 
 	pub static ref COMBINED_PATCH_DATA: Vec<u8> = vec_from_slices![&*PATCH_DATA, &*PATCH_DATA_NO_NEW_LINES];
 
-	pub static ref PATCH: Patch<'static> = {
+	pub static ref PATCH: Patch = {
 		Patch {
 			change: Change::Modification {
 				modification_type: ModificationType::Edited,
@@ -93,7 +93,7 @@ lazy_static! {
 		}
 	};
 
-	pub static ref PATCH_ADDITION: Patch<'static> = {
+	pub static ref PATCH_ADDITION: Patch = {
 		Patch {
 			change: Change::Addition {
 				new_properties: FileProperties {
@@ -106,7 +106,7 @@ lazy_static! {
 		}
 	};
 
-	pub static ref PATCH_NO_NEW_LINES: Patch<'static> = {
+	pub static ref PATCH_NO_NEW_LINES: Patch = {
 		Patch {
 			change: Change::Modification {
 				modification_type: ModificationType::Edited,
@@ -125,22 +125,22 @@ lazy_static! {
 		}
 	};
 
-	pub static ref COMBINED_PATCH: Vec<&'static Patch<'static>> = vec![&*PATCH, &*PATCH_NO_NEW_LINES];
+	pub static ref COMBINED_PATCH: Vec<&'static Patch> = vec![&*PATCH, &*PATCH_NO_NEW_LINES];
 }
 
-pub fn generate_hunk_1<'a>() -> Hunk<'a> {
+pub fn generate_hunk_1<'a>() -> Hunk {
 	Hunk {
 		old_file_range: 1..10,
 		new_file_range: 1..4,
-		data: &*PATCH_DATA_HUNK_1_CONTENTS,
+		data: PATCH_DATA_HUNK_1_CONTENTS.into(),
 	}
 }
 
-pub fn generate_hunk_2<'a>() -> Hunk<'a> {
+pub fn generate_hunk_2<'a>() -> Hunk {
 	Hunk {
 		old_file_range: 14..18,
 		new_file_range: 8..12,
-		data: &*PATCH_DATA_HUNK_2_CONTENTS,
+		data: PATCH_DATA_HUNK_2_CONTENTS.into(),
 	}
 }
 
@@ -152,10 +152,10 @@ fn generate_patch_data(no_extended_header: bool) -> Vec<u8> {
 			&**PATCH_DATA_HUNK_2]
 }
 
-fn generate_hunk_no_new_lines<'a>() -> Hunk<'a> {
+fn generate_hunk_no_new_lines<'a>() -> Hunk {
 	Hunk {
 		old_file_range: 1..2,
 		new_file_range: 1..2,
-		data: &*PATCH_DATA_NO_NEW_LINES_HUNK_CONTENTS
+		data: PATCH_DATA_NO_NEW_LINES_HUNK_CONTENTS.into()
 	}
 }
