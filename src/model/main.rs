@@ -1,6 +1,5 @@
+use git::{self, Git};
 use winapi::shared::minwindef::DWORD;
-use begitter::git;
-use begitter::git::Git;
 use std::ffi::OsStr;
 use std::thread;
 use std::sync;
