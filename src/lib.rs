@@ -16,4 +16,5 @@ extern crate tempdir;
 pub mod patch_editor;
 pub mod git;
 pub mod change_set;
+pub mod model;
 mod parsing_utils;
