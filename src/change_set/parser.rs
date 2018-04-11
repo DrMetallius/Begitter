@@ -7,7 +7,7 @@ use time::Timespec;
 const ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO: u32 = 0;
 
 named!(
-	commit<ChangeSetInfo>,
+	pub parse_commit_info<ChangeSetInfo>,
 	do_parse!(
 		properties: many1!(property) >>
 		newline >>
@@ -19,7 +19,6 @@ named!(
 
 fn change_set_info_from_properties(properties: &[CommitProperty], message: &[u8]) -> Result<ChangeSetInfo, failure::Error> {
 	let mut change_set = ChangeSetInfo {
-		hash: None,
 		author_action: PersonAction::default(),
 		committer_action: PersonAction::default(),
 		message: String::from_utf8(message.into())?,
@@ -96,9 +95,8 @@ committer Alexander Gazarov <drmetallius@gmail.com> 1523207822 +0300
 
 Это проверка
 ".as_bytes();
-		let result = commit(data).to_result().unwrap();
+		let result = parse_commit_info(data).to_result().unwrap();
 		assert_eq!(result, ChangeSetInfo {
-			hash: None,
 			author_action: PersonAction {
 				name: String::from("Один чувак <абырвалг@example.com>"),
 				time: Timespec { sec: 1523207666, nsec: 0 },
