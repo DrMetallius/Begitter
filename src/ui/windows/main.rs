@@ -4,6 +4,7 @@ use std::sync::Arc;
 use failure;
 use super::helpers::*;
 use begitter::model::main::{MainModel, MainView};
+use begitter::change_set::Commit;
 use ui::text::WINDOW_NAME;
 use winapi::Interface;
 use winapi::shared::guiddef::GUID;
@@ -179,7 +180,7 @@ impl MainViewRelay {
 
 enum MainViewMessage {
 	Branches(Vec<String>, String),
-	Commits(Vec<String>),
+	Commits(Vec<Commit>),
 }
 
 impl MainView for MainViewRelay {
@@ -189,13 +190,13 @@ impl MainView for MainViewRelay {
 		self.post_on_main_thread(MainViewMessage::Branches(branches, active_branch)).map_err(|err| err.into())
 	}
 
-	fn show_commits(&self, commits: Vec<String>) -> Result<(), failure::Error> {
+	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::Commits(commits)).map_err(|err| err.into())
 	}
 
-	fn show_edited_commits(&self, commits: &[String]) {}
-
-	fn show_patches(&self, commits: &[String]) {}
+	fn show_edited_commits(&self, commits: &[String]) -> Result<(), failure::Error> {
+		Ok(())
+	}
 }
 
 struct MainViewImpl {
@@ -204,7 +205,7 @@ struct MainViewImpl {
 
 	branches: Vec<String>,
 	active_branch: Option<String>,
-	commits: Vec<String>,
+	commits: Vec<Commit>,
 }
 
 impl MainViewImpl {
@@ -220,7 +221,7 @@ impl MainViewImpl {
 
 	fn receive_on_main_thread(&mut self, message: &MSG) -> Result<(), WinApiError> {
 		debug_assert_eq!(message.message, MESSAGE_MAIN_VIEW);
-		let mut arguments = unsafe {
+		let arguments = unsafe {
 			*Box::from_raw(message.lParam as *mut _)
 		};
 
@@ -238,7 +239,7 @@ impl MainViewImpl {
 
 				try_send_message!(self.commits_list_box, LB_RESETCONTENT, 0, 0);
 				for commit in &self.commits {
-					try_send_message!(self.commits_list_box, LB_ADDSTRING, 0, to_wstring(&commit).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
+					try_send_message!(self.commits_list_box, LB_ADDSTRING, 0, to_wstring(&commit.info.message).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
 				}
 			}
 		}
