@@ -5,8 +5,11 @@ use std::ptr::null_mut;
 use std::slice;
 use winapi::Interface;
 use winapi::shared::ntdef::PWSTR;
+use winapi::shared::minwindef::HINSTANCE;
+use winapi::shared::windef::HMENU;
 use winapi::um::combaseapi::CoTaskMemFree;
 use winapi::um::unknwnbase::IUnknown;
+use winapi::um::winuser::{LoadMenuW, DestroyMenu};
 use libc::wcslen;
 use std::error::Error;
 use std::fmt::Display;
@@ -68,7 +71,7 @@ macro_rules! try_get {
 		unsafe {
 			let result = $($call).*($($args),*);
 			if result.is_null() {
-				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(GetLastError() as u64));
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64));
 			}
 			result
 		}
@@ -80,7 +83,7 @@ macro_rules! try_call {
 		unsafe {
 			let result = $($call).*($($args),*);
 			if result == $error_value {
-				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(GetLastError() as u64));
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64));
 			}
 			result
 		}
@@ -90,7 +93,7 @@ macro_rules! try_call {
 macro_rules! try_send_message {
 	($($args:expr),*) => {
 		unsafe {
-			::winapi::um::winuser::SendMessageW($($args),*);
+			::winapi::um::winuser::SendMessageW($($args),*)
 		}
 	};
 	($($args:expr),*; $($error_value:expr),*) => {
@@ -216,5 +219,30 @@ pub struct WinApiError(pub u64);
 impl From<isize> for WinApiError {
 	fn from(code: isize) -> WinApiError {
 		WinApiError(code as u64)
+	}
+}
+
+pub struct MenuHandle {
+	handle: HMENU
+}
+
+impl MenuHandle {
+	pub fn load(name: &str) -> Result<MenuHandle, WinApiError> {
+		let handle = try_get!(LoadMenuW(0 as HINSTANCE, to_wstring(name).as_ptr()));
+		Ok(MenuHandle {
+			handle
+		})
+	}
+
+	pub fn handle(&self) -> HMENU {
+		self.handle
+	}
+}
+
+impl Drop for MenuHandle {
+	fn drop(&mut self) {
+		unsafe {
+			DestroyMenu(self.handle);
+		}
 	}
 }

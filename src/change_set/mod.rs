@@ -9,19 +9,20 @@ pub struct CombinedPatch {
 	pub patches: Vec<Patch>
 }
 
+#[derive(Clone)]
 pub struct Commit {
 	pub hash: String,
 	pub info: ChangeSetInfo
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct ChangeSetInfo {
 	pub author_action: PersonAction,
 	pub committer_action: PersonAction,
 	pub message: String
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct PersonAction {
 	name: String,
 	time: Timespec,

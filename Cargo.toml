@@ -8,7 +8,7 @@ nom = "^3.2"
 failure = "^0.1"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "^0.3", features = ["combaseapi", "commctrl", "errhandlingapi", "libloaderapi", "shobjidl", "winuser", "wincon", "winerror"] }
+winapi = { version = "^0.3", features = ["combaseapi", "commctrl", "errhandlingapi", "libloaderapi", "shobjidl", "winuser", "wincon", "windowsx", "winerror"] }
 libc = "^0.2"
 time = "^0.1"
 
