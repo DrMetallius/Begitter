@@ -1,4 +1,4 @@
-use git::Git;
+use git::{self, Git};
 use std::ffi::OsStr;
 use std::thread;
 use std::sync;
@@ -6,14 +6,16 @@ use std::sync::Arc;
 use std::ffi::OsString;
 use std::error::Error;
 use failure;
-use change_set::Commit;
+use change_set::{Commit, CombinedPatch, ChangeSetInfo};
+use patch_editor::parser::parse_combined_patch;
 
 enum Command {
-	GetBranches
+	GetBranches,
+	ImportCommits(Vec<Commit>),
 }
 
 pub struct MainModel {
-	worker_sink: sync::mpsc::Sender<Command>,
+	worker_sink: sync::mpsc::Sender<Command>
 }
 
 impl MainModel {
@@ -28,12 +30,13 @@ impl MainModel {
 		let repo_dir_owned: OsString = repo_dir.as_ref().into();
 		thread::spawn(move || {
 			let mut git = Git::new(repo_dir_owned);
+			let mut combined_patches = Vec::<CombinedPatch>::new();
 			loop {
 				let command = match receiver.recv() {
 					Ok(command) => command,
 					Err(_) => break
 				};
-				let result = MainModel::perform_command(&*view_ref, &mut git, command);
+				let result = MainModel::perform_command(&*view_ref, &mut git, &mut combined_patches, command);
 				if let Err(error) = result {
 					view.error(error);
 				}
@@ -44,7 +47,7 @@ impl MainModel {
 		model
 	}
 
-	fn perform_command(view: &MainView, git: &mut Git, command: Command) -> Result<(), failure::Error> {
+	fn perform_command(view: &MainView, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>, command: Command) -> Result<(), failure::Error> {
 		match command {
 			Command::GetBranches => {
 				let refs = git.show_refs_heads()?;
@@ -61,10 +64,29 @@ impl MainModel {
 					commits.push(commit);
 				}
 				view.show_commits(commits)?;
-				view.show_edited_commits(&[])?;
+				view.show_combined_patches(Vec::new())?;
+			}
+			Command::ImportCommits(commits) => {
+				let mut new_combined_patches = Vec::<CombinedPatch>::new();
+				for commit in commits {
+					let combined_patch_data = git.diff_tree(&commit.hash)?;
+					let patches = parse_combined_patch(combined_patch_data.as_bytes())?;
+					let combined_patch = CombinedPatch {
+						info: commit.info,
+						patches
+					};
+					new_combined_patches.push(combined_patch);
+				}
+
+				combined_patches.extend(new_combined_patches);
+				view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())?;
 			}
 		}
 		Ok(())
+	}
+
+	pub fn import_commits(&self, commits: Vec<Commit>) {
+		self.worker_sink.send(Command::ImportCommits(commits)).unwrap();
 	}
 }
 
@@ -72,5 +94,5 @@ pub trait MainView: Sync + Send {
 	fn error(&self, error: failure::Error);
 	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), failure::Error>;
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error>;
-	fn show_edited_commits(&self, commits: &[String]) -> Result<(), failure::Error>;
+	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error>;
 }
