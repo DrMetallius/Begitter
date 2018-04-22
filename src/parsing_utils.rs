@@ -2,7 +2,7 @@ use nom::not_line_ending;
 
 named!(
 	pub file_name<Vec<u8>>,
-	alt!(quoted_name | map!(not_line_ending, |slice| slice.into()))
+	alt!(quoted_name | map!(not_line_ending, |slice| (if slice.ends_with(&b"\t"[..]) { &slice[..slice.len() - 1] } else { slice }).into()))
 );
 
 named!(
