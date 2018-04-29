@@ -11,11 +11,7 @@ use winapi::um::combaseapi::CoTaskMemFree;
 use winapi::um::unknwnbase::IUnknown;
 use winapi::um::winuser::{LoadMenuW, DestroyMenu};
 use libc::wcslen;
-use std::error::Error;
-use std::fmt::Display;
-use std::fmt::Formatter;
 use std::result::Result::Ok;
-use std::fmt;
 
 macro_rules! try_com {
 	($($call:ident).+($($args:tt)*)) => {
