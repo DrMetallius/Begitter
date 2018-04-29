@@ -1,5 +1,10 @@
 #define RT_MANIFEST 24
 
+#define STRING_MAIN_WINDOW_NAME 1
+#define STRING_MAIN_BRANCHES 2
+#define STRING_MAIN_COMMITS 3
+#define STRING_MAIN_PATCHES 4
+
 #define ID_MENU_OPEN 100
 #define ID_MENU_IMPORT 200
 
@@ -24,4 +29,12 @@ main_commit_menu MENU
 main_accelerators ACCELERATORS
 {
     "o", ID_MENU_OPEN, CONTROL, VIRTKEY
+}
+
+STRINGTABLE
+{
+    STRING_MAIN_WINDOW_NAME L"Begitter"
+    STRING_MAIN_BRANCHES L"Branches"
+    STRING_MAIN_COMMITS L"Commits"
+    STRING_MAIN_PATCHES L"Patches"
 }

@@ -1,10 +1,9 @@
-use git::{self, Git};
+use git::Git;
 use std::ffi::OsStr;
 use std::thread;
 use std::sync;
 use std::sync::Arc;
 use std::ffi::OsString;
-use std::error::Error;
 use failure;
 use change_set::{Commit, CombinedPatch, ChangeSetInfo};
 use patch_editor::parser::parse_combined_patch;
