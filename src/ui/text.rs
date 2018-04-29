@@ -1,1 +1,0 @@
-pub const WINDOW_NAME: &str = "Begitter";
