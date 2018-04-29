@@ -1,20 +1,14 @@
-use std::error::Error;
 use std::ptr::null_mut;
 use std::sync::Arc;
+
 use failure;
-use super::helpers::*;
-use begitter::model::main::{MainModel, MainView};
-use begitter::change_set::{Commit, ChangeSetInfo};
-use ui::text::WINDOW_NAME;
 use winapi::Interface;
 use winapi::shared::guiddef::GUID;
 use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, MAKELONG, LPARAM, LRESULT, UINT, WORD, WPARAM};
-use winapi::shared::ntdef::HRESULT;
 use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT};
 use winapi::shared::winerror::S_OK;
 use winapi::shared::wtypesbase::CLSCTX_INPROC_SERVER;
 use winapi::um::combaseapi::CoCreateInstance;
-use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::processthreadsapi::GetCurrentThreadId;
 use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
@@ -22,10 +16,15 @@ use winapi::um::winnt::WCHAR;
 use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW, LB_RESETCONTENT, IDI_APPLICATION,
 	LB_ADDSTRING, LBS_NOTIFY, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostThreadMessageW, PostMessageW, RegisterClassW, ShowWindow, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
-	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TrackPopupMenu, InsertMenuW, TPM_TOPALIGN, TPM_LEFTALIGN,
-	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints};
+	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN,
+	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW};
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
-use std::rc::Rc;
+
+use super::helpers::*;
+use begitter::model::main::{MainModel, MainView};
+use begitter::change_set::{Commit, ChangeSetInfo};
+use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
+use ui::windows::utils::set_fonts;
 
 const MAIN_CLASS: &str = "main";
 
@@ -35,7 +34,6 @@ const MAIN_ACCELERATORS: &str = "main_accelerators";
 
 const ID_MENU_OPEN: WORD = 100;
 const ID_MENU_IMPORT: WORD = 200;
-const ID_CHILD_BRANCHES_LIST: HMENU = 200 as HMENU;
 
 const MESSAGE_OPEN_FOLDER: UINT = WM_APP;
 const MESSAGE_MODEL_TO_MAIN_VIEW: UINT = WM_APP + 1;
@@ -66,28 +64,18 @@ pub fn run() -> Result<(), WinApiError> {
 
 	try_call!(RegisterClassW(&wnd), 0);
 
-	let h_wnd_window = try_get!(CreateWindowExW(0, class_name.as_ptr(), to_wstring(WINDOW_NAME).as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+	let main_window = try_get!(CreateWindowExW(0, class_name.as_ptr(), load_string(STRING_MAIN_WINDOW_NAME)?.as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE,
 		0, 0, 500, 500, 0 as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
-	let branches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-		0, 0, 200, 200, h_wnd_window as HWND, ID_CHILD_BRANCHES_LIST as HMENU, 0 as HINSTANCE, null_mut()));
-
-	let combined_patches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-		210, 0, 200, 200, h_wnd_window as HWND, ID_CHILD_BRANCHES_LIST as HMENU, 0 as HINSTANCE, null_mut()));
-
-	let commits_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-		210, 210, 200, 200, h_wnd_window as HWND, ID_CHILD_BRANCHES_LIST as HMENU, 0 as HINSTANCE, null_mut()));
-
 	unsafe {
-		ShowWindow(h_wnd_window, SW_SHOWDEFAULT);
+		ShowWindow(main_window, SW_SHOWDEFAULT);
 	}
 
 	let main_view_relay = Arc::new(MainViewRelay {
 		main_thread_id: unsafe { GetCurrentThreadId() }
 	});
 
-	let mut main_view = MainViewImpl::new(h_wnd_window, branches_list_box, combined_patches_list_box, commits_list_box);
-	let mut main_model: Option<MainModel> = None;
+	let mut main_view = MainViewImpl::initialize(main_window)?;
 
 	let accelerators = try_get!(LoadAcceleratorsW(null_mut(), to_wstring(MAIN_ACCELERATORS).as_ptr()));
 
@@ -126,7 +114,7 @@ pub fn run() -> Result<(), WinApiError> {
 			}
 			_ => {
 				unsafe {
-					if TranslateAcceleratorW(h_wnd_window, accelerators, &mut msg) == 0 {
+					if TranslateAcceleratorW(main_window, accelerators, &mut msg) == 0 {
 						TranslateMessage(&mut msg);
 						DispatchMessageW(&mut msg);
 					}
@@ -283,8 +271,31 @@ struct MainViewImpl {
 }
 
 impl MainViewImpl {
-	fn new(main_window: HWND, branches_list_box: HWND, combined_patches_list_box: HWND, commits_list_box: HWND) -> MainViewImpl {
-		MainViewImpl {
+	fn initialize(main_window: HWND) -> Result<MainViewImpl, WinApiError> {
+		let branches_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 7, 5, 100, 25,
+				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(branches_label, load_string(STRING_MAIN_BRANCHES)?.as_ptr()), 0);
+
+		let patches_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 210, 5, 100, 25,
+				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(patches_label, load_string(STRING_MAIN_PATCHES)?.as_ptr()), 0);
+
+		let commits_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 210, 220, 100, 25,
+				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(commits_label, load_string(STRING_MAIN_COMMITS)?.as_ptr()), 0);
+
+		let branches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+				7, 30, 200, 200, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+
+		let combined_patches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+				210, 30, 200, 200, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+
+		let commits_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+				210, 240, 200, 200, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+
+		set_fonts(main_window)?;
+
+		Ok(MainViewImpl {
 			model: None,
 			main_window,
 			branches_list_box,
@@ -294,7 +305,7 @@ impl MainViewImpl {
 			active_branch: None,
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
-		}
+		})
 	}
 
 	fn set_model(&mut self, model: MainModel) {
