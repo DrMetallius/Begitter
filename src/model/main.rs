@@ -18,7 +18,7 @@ pub struct MainModel {
 }
 
 impl MainModel {
-	pub fn new<S: AsRef<OsStr>>(view: Arc<MainView>, repo_dir: S) -> MainModel {
+	pub fn new<S: AsRef<OsStr>>(view: Arc<MainViewReceiver>, repo_dir: S) -> MainModel {
 		let (sender, receiver) = sync::mpsc::channel();
 
 		let model = MainModel {
@@ -46,7 +46,7 @@ impl MainModel {
 		model
 	}
 
-	fn perform_command(view: &MainView, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>, command: Command) -> Result<(), failure::Error> {
+	fn perform_command(view: &MainViewReceiver, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>, command: Command) -> Result<(), failure::Error> {
 		match command {
 			Command::GetBranches => {
 				let refs = git.show_refs_heads()?;
@@ -89,7 +89,7 @@ impl MainModel {
 	}
 }
 
-pub trait MainView: Sync + Send {
+pub trait MainViewReceiver: Sync + Send {
 	fn error(&self, error: failure::Error);
 	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), failure::Error>;
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error>;
