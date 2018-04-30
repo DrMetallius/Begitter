@@ -21,7 +21,7 @@ use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessage
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 
 use super::helpers::*;
-use begitter::model::main::{MainModel, MainView};
+use begitter::model::main::{MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
 use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
 use ui::windows::utils::set_fonts;
@@ -35,9 +35,7 @@ const MAIN_ACCELERATORS: &str = "main_accelerators";
 const ID_MENU_OPEN: WORD = 100;
 const ID_MENU_IMPORT: WORD = 200;
 
-const MESSAGE_OPEN_FOLDER: UINT = WM_APP;
-const MESSAGE_MODEL_TO_MAIN_VIEW: UINT = WM_APP + 1;
-const MESSAGE_RELAYED_MESSAGE: UINT = WM_APP + 2;
+const MESSAGE_MODEL_TO_MAIN_VIEW: UINT = WM_APP;
 
 const GUID_FILE_DIALOG: GUID = GUID {
 	Data1: 0xdc1c5a9c,
@@ -45,6 +43,9 @@ const GUID_FILE_DIALOG: GUID = GUID {
 	Data3: 0x4dde,
 	Data4: [0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7],
 };
+
+static mut main_view: Option<MainView> = None;
+static mut main_view_relay: Option<Arc<MainViewRelay>> = None;
 
 pub fn run() -> Result<(), WinApiError> {
 	let main_menu = to_wstring(MAIN_MENU);
@@ -69,13 +70,12 @@ pub fn run() -> Result<(), WinApiError> {
 
 	unsafe {
 		ShowWindow(main_window, SW_SHOWDEFAULT);
+
+		main_view_relay = Some(Arc::new(MainViewRelay {
+			main_window
+		}));
+		main_view = Some(MainView::initialize(main_window)?);
 	}
-
-	let main_view_relay = Arc::new(MainViewRelay {
-		main_thread_id: unsafe { GetCurrentThreadId() }
-	});
-
-	let mut main_view = MainViewImpl::initialize(main_window)?;
 
 	let accelerators = try_get!(LoadAcceleratorsW(null_mut(), to_wstring(MAIN_ACCELERATORS).as_ptr()));
 
@@ -94,39 +94,18 @@ pub fn run() -> Result<(), WinApiError> {
 			break;
 		}
 
-		match msg.message {
-			MESSAGE_OPEN_FOLDER => {
-				let dir = unsafe {
-					*Box::from_raw(msg.lParam as *mut String)
-				};
-				main_view.set_model(MainModel::new(main_view_relay.clone(), dir));
-			}
-			MESSAGE_MODEL_TO_MAIN_VIEW => main_view.receive_model_message_on_main_thread(&msg)?,
-			MESSAGE_RELAYED_MESSAGE => {
-				let message_data = MessageData::unpack(msg.lParam);
-				let handled = main_view.receive_system_message(&message_data)?;
-				if !handled {
-					msg.lParam = Box::into_raw(Box::new(message_data)) as LPARAM;
-					unsafe {
-						DispatchMessageW(&mut msg);
-					}
-				}
-			}
-			_ => {
-				unsafe {
-					if TranslateAcceleratorW(main_window, accelerators, &mut msg) == 0 {
-						TranslateMessage(&mut msg);
-						DispatchMessageW(&mut msg);
-					}
-				}
+		unsafe {
+			if TranslateAcceleratorW(main_window, accelerators, &mut msg) == 0 {
+				TranslateMessage(&mut msg);
+				DispatchMessageW(&mut msg);
 			}
 		}
 	}
 	Ok(())
 }
 
-pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-	let result = match msg {
+pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+	let result = match message {
 		winuser::WM_DESTROY => {
 			unsafe {
 				PostQuitMessage(0);
@@ -138,7 +117,7 @@ pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_pa
 				ID_MENU_OPEN => {
 					if let Ok(dir) = show_open_file_dialog(h_wnd) {
 						unsafe {
-							PostMessageW(h_wnd, MESSAGE_OPEN_FOLDER, 0, Box::into_raw(Box::new(dir)) as LPARAM);
+							main_view.as_mut().unwrap().set_model(MainModel::new(main_view_relay.as_mut().unwrap().clone(), dir));
 						}
 					}
 					Some(0)
@@ -146,18 +125,15 @@ pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_pa
 				_ => None
 			}
 		}
-		winuser::WM_CONTEXTMENU => {
-			unsafe {
-				PostMessageW(h_wnd, MESSAGE_RELAYED_MESSAGE, 0, MessageData::pack(h_wnd, msg, w_param, l_param));
-			}
-			Some(0)
-		}
-		MESSAGE_RELAYED_MESSAGE => {
-			let message_data = MessageData::unpack(l_param);
-			unsafe {
-				DefWindowProcW(message_data.h_wnd, message_data.message, message_data.w_param, message_data.l_param);
-			}
-			Some(0)
+		winuser::WM_CONTEXTMENU | MESSAGE_MODEL_TO_MAIN_VIEW => {
+			let message_data = MessageData {
+				h_wnd,
+				message,
+				w_param,
+				l_param
+			};
+			let handled = unsafe { main_view.as_mut().unwrap().receive_message(&message_data).unwrap() };
+			if handled { Some(0) } else { None }
 		}
 		_ => None
 	};
@@ -167,7 +143,7 @@ pub extern "system" fn window_proc(h_wnd: HWND, msg: UINT, w_param: WPARAM, l_pa
 	}
 
 	unsafe {
-		DefWindowProcW(h_wnd, msg, w_param, l_param)
+		DefWindowProcW(h_wnd, message, w_param, l_param)
 	}
 }
 
@@ -176,32 +152,6 @@ struct MessageData {
 	message: UINT,
 	w_param: WPARAM,
 	l_param: LPARAM,
-}
-
-impl MessageData {
-	fn pack(h_wnd: HWND, message: UINT, w_param: WPARAM, l_param: LPARAM) -> LPARAM {
-		let data = MessageData {
-			h_wnd,
-			message,
-			w_param,
-			l_param,
-		};
-		Box::into_raw(Box::new(data)) as LPARAM
-	}
-
-	fn unpack(l_param: LPARAM) -> MessageData {
-		let data_box = unsafe {
-			Box::from_raw(l_param as *mut _)
-		};
-		*data_box
-	}
-
-	fn to_message(&self, msg: &mut MSG) {
-		msg.hwnd = self.h_wnd;
-		msg.message = self.message;
-		msg.wParam = self.w_param;
-		msg.lParam = self.l_param;
-	}
 }
 
 fn show_open_file_dialog(owner: HWND) -> Result<String, WinApiError> {
@@ -221,24 +171,22 @@ fn show_open_file_dialog(owner: HWND) -> Result<String, WinApiError> {
 }
 
 struct MainViewRelay {
-	main_thread_id: DWORD
+	main_window: HWND
 }
 
 impl MainViewRelay {
 	fn post_on_main_thread(&self, message: MainViewMessage) -> Result<(), WinApiError> {
 		let message = Box::new(message);
-		try_call!(PostThreadMessageW(self.main_thread_id, MESSAGE_MODEL_TO_MAIN_VIEW, 0, Box::into_raw(message) as LPARAM), 0);
+		try_call!(PostMessageW(self.main_window, MESSAGE_MODEL_TO_MAIN_VIEW, 0, Box::into_raw(message) as LPARAM), 0);
 		Ok(())
 	}
 }
 
-enum MainViewMessage {
-	Branches(Vec<String>, String),
-	Commits(Vec<Commit>),
-	CombinedPatches(Vec<ChangeSetInfo>),
-}
+unsafe impl Send for MainViewRelay {}
 
-impl MainView for MainViewRelay {
+unsafe impl Sync for MainViewRelay {}
+
+impl MainViewReceiver for MainViewRelay {
 	fn error(&self, error: failure::Error) {
 		println!("We've got an error: {}\n{}", error, error.backtrace()); // TODO: this is not proper error handling
 	}
@@ -256,7 +204,13 @@ impl MainView for MainViewRelay {
 	}
 }
 
-struct MainViewImpl {
+enum MainViewMessage {
+	Branches(Vec<String>, String),
+	Commits(Vec<Commit>),
+	CombinedPatches(Vec<ChangeSetInfo>),
+}
+
+struct MainView {
 	model: Option<MainModel>,
 
 	main_window: HWND,
@@ -270,8 +224,8 @@ struct MainViewImpl {
 	combined_patches: Vec<ChangeSetInfo>,
 }
 
-impl MainViewImpl {
-	fn initialize(main_window: HWND) -> Result<MainViewImpl, WinApiError> {
+impl MainView {
+	fn initialize(main_window: HWND) -> Result<MainView, WinApiError> {
 		let branches_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 7, 5, 100, 25,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		try_call!(SetWindowTextW(branches_label, load_string(STRING_MAIN_BRANCHES)?.as_ptr()), 0);
@@ -295,7 +249,7 @@ impl MainViewImpl {
 
 		set_fonts(main_window)?;
 
-		Ok(MainViewImpl {
+		Ok(MainView {
 			model: None,
 			main_window,
 			branches_list_box,
@@ -312,10 +266,10 @@ impl MainViewImpl {
 		self.model = Some(model)
 	}
 
-	fn receive_model_message_on_main_thread(&mut self, message: &MSG) -> Result<(), WinApiError> {
-		debug_assert_eq!(message.message, MESSAGE_MODEL_TO_MAIN_VIEW);
+	fn receive_model_message_on_main_thread(&mut self, message_data: &MessageData) -> Result<(), WinApiError> {
+		debug_assert_eq!(message_data.message, MESSAGE_MODEL_TO_MAIN_VIEW);
 		let arguments = unsafe {
-			*Box::from_raw(message.lParam as *mut _)
+			*Box::from_raw(message_data.l_param as *mut _)
 		};
 
 		match arguments {
@@ -348,7 +302,7 @@ impl MainViewImpl {
 		Ok(())
 	}
 
-	fn receive_system_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
+	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
 		let handled = match message_data.message {
 			winuser::WM_CONTEXTMENU => {
 				if message_data.w_param as HWND == self.commits_list_box {
@@ -356,6 +310,10 @@ impl MainViewImpl {
 				} else {
 					false
 				}
+			}
+			MESSAGE_MODEL_TO_MAIN_VIEW => {
+				self.receive_model_message_on_main_thread(message_data)?;
+				true
 			}
 			_ => false
 		};
