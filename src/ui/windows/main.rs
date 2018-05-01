@@ -3,20 +3,21 @@ use std::sync::Arc;
 
 use failure;
 use winapi::Interface;
+use winapi::ctypes::c_int;
 use winapi::shared::guiddef::GUID;
-use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, MAKELONG, LPARAM, LRESULT, UINT, WORD, WPARAM};
-use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT};
+use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, MAKELONG, LPARAM, LRESULT, UINT, WORD, WPARAM, TRUE};
+use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT, RECT};
 use winapi::shared::winerror::S_OK;
 use winapi::shared::wtypesbase::CLSCTX_INPROC_SERVER;
 use winapi::um::combaseapi::CoCreateInstance;
-use winapi::um::processthreadsapi::GetCurrentThreadId;
 use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
 use winapi::um::winnt::WCHAR;
-use winapi::um::winuser::{self, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW, LB_RESETCONTENT, IDI_APPLICATION,
+use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
+	IDC_ARROW, LB_RESETCONTENT, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE,
 	LB_ADDSTRING, LBS_NOTIFY, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
-	PostThreadMessageW, PostMessageW, RegisterClassW, ShowWindow, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
-	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN,
+	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
+	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN, WS_CLIPCHILDREN,
 	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW};
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 
@@ -24,7 +25,8 @@ use super::helpers::*;
 use begitter::model::main::{MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
 use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
-use ui::windows::utils::set_fonts;
+use ui::windows::utils::{set_fonts, get_window_position};
+use ui::windows::dpi::GetDpiForWindow;
 
 const MAIN_CLASS: &str = "main";
 
@@ -44,8 +46,8 @@ const GUID_FILE_DIALOG: GUID = GUID {
 	Data4: [0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7],
 };
 
-static mut main_view: Option<MainView> = None;
-static mut main_view_relay: Option<Arc<MainViewRelay>> = None;
+static mut MAIN_VIEW: Option<MainView> = None;
+static mut MAIN_VIEW_RELAY: Option<Arc<MainViewRelay>> = None;
 
 pub fn run() -> Result<(), WinApiError> {
 	let main_menu = to_wstring(MAIN_MENU);
@@ -65,16 +67,16 @@ pub fn run() -> Result<(), WinApiError> {
 
 	try_call!(RegisterClassW(&wnd), 0);
 
-	let main_window = try_get!(CreateWindowExW(0, class_name.as_ptr(), load_string(STRING_MAIN_WINDOW_NAME)?.as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+	let main_window = try_get!(CreateWindowExW(0, class_name.as_ptr(), load_string(STRING_MAIN_WINDOW_NAME)?.as_ptr(), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
 		0, 0, 500, 500, 0 as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
 	unsafe {
 		ShowWindow(main_window, SW_SHOWDEFAULT);
 
-		main_view_relay = Some(Arc::new(MainViewRelay {
+		MAIN_VIEW_RELAY = Some(Arc::new(MainViewRelay {
 			main_window
 		}));
-		main_view = Some(MainView::initialize(main_window)?);
+		MAIN_VIEW = Some(MainView::initialize(main_window)?);
 	}
 
 	let accelerators = try_get!(LoadAcceleratorsW(null_mut(), to_wstring(MAIN_ACCELERATORS).as_ptr()));
@@ -117,7 +119,7 @@ pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, 
 				ID_MENU_OPEN => {
 					if let Ok(dir) = show_open_file_dialog(h_wnd) {
 						unsafe {
-							main_view.as_mut().unwrap().set_model(MainModel::new(main_view_relay.as_mut().unwrap().clone(), dir));
+							MAIN_VIEW.as_mut().unwrap().set_model(MainModel::new(MAIN_VIEW_RELAY.as_mut().unwrap().clone(), dir));
 						}
 					}
 					Some(0)
@@ -125,17 +127,23 @@ pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, 
 				_ => None
 			}
 		}
-		winuser::WM_CONTEXTMENU | MESSAGE_MODEL_TO_MAIN_VIEW => {
-			let message_data = MessageData {
-				h_wnd,
-				message,
-				w_param,
-				l_param
+		_ => {
+			let handled = unsafe {
+				match MAIN_VIEW.as_mut() {
+					Some(view) => {
+						let message_data = MessageData {
+							h_wnd,
+							message,
+							w_param,
+							l_param
+						};
+						view.receive_message(&message_data).unwrap()
+					},
+					None => false
+				}
 			};
-			let handled = unsafe { main_view.as_mut().unwrap().receive_message(&message_data).unwrap() };
 			if handled { Some(0) } else { None }
 		}
-		_ => None
 	};
 
 	if let Some(result_code) = result {
@@ -214,6 +222,7 @@ struct MainView {
 	model: Option<MainModel>,
 
 	main_window: HWND,
+	commits_label: HWND,
 	branches_list_box: HWND,
 	commits_list_box: HWND,
 	combined_patches_list_box: HWND,
@@ -225,33 +234,46 @@ struct MainView {
 }
 
 impl MainView {
+	const LABEL_WIDTH: c_int = 100;
+	const EDGE_MARGIN: c_int = 7;
+	const BRANCHES_WIDTH: c_int = 200;
+	const SEPARATOR_WIDTH: c_int = 5;
+	const COMMIT_AND_PATCH_HOR_POSITION: c_int = MainView::EDGE_MARGIN + MainView::BRANCHES_WIDTH + MainView::SEPARATOR_WIDTH;
+	const LABEL_HEIGHT: c_int = 25;
+
 	fn initialize(main_window: HWND) -> Result<MainView, WinApiError> {
-		let branches_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 7, 5, 100, 25,
-				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		let static_class = to_wstring("STATIC");
+		let list_box_class = to_wstring("LISTBOX");
+
+		let branches_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD,
+				MainView::EDGE_MARGIN, MainView::EDGE_MARGIN, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		try_call!(SetWindowTextW(branches_label, load_string(STRING_MAIN_BRANCHES)?.as_ptr()), 0);
 
-		let patches_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 210, 5, 100, 25,
+		let patches_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD,
+				MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		try_call!(SetWindowTextW(patches_label, load_string(STRING_MAIN_PATCHES)?.as_ptr()), 0);
 
-		let commits_label = try_get!(CreateWindowExW(0, to_wstring("STATIC").as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 210, 220, 100, 25,
+		let commits_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 0, 0, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		try_call!(SetWindowTextW(commits_label, load_string(STRING_MAIN_COMMITS)?.as_ptr()), 0);
 
-		let branches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-				7, 30, 200, 200, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		let branches_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+				MainView::EDGE_MARGIN, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(branches_label, load_string(STRING_MAIN_BRANCHES)?.as_ptr()), 0);
 
-		let combined_patches_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-				210, 30, 200, 200, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		let combined_patches_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+				MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
-		let commits_list_box = try_get!(CreateWindowExW(0, to_wstring("LISTBOX").as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-				210, 240, 200, 200, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		let commits_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+				0, 0, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
 		set_fonts(main_window)?;
 
-		Ok(MainView {
+		let view = MainView {
 			model: None,
 			main_window,
+			commits_label,
 			branches_list_box,
 			combined_patches_list_box,
 			commits_list_box,
@@ -259,7 +281,12 @@ impl MainView {
 			active_branch: None,
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
-		})
+		};
+
+		let rect = get_window_position(main_window, main_window)?;
+		view.reposition_views(rect.right - rect.left, rect.bottom - rect.top)?;
+
+		Ok(view)
 	}
 
 	fn set_model(&mut self, model: MainModel) {
@@ -310,6 +337,13 @@ impl MainView {
 				} else {
 					false
 				}
+			}
+			winuser::WM_SIZING => {
+				let rect = unsafe { *(message_data.l_param as *const RECT) };
+				let width = rect.right - rect.left;
+				let height = rect.bottom - rect.top;
+				self.reposition_views(width, height)?;
+				true
 			}
 			MESSAGE_MODEL_TO_MAIN_VIEW => {
 				self.receive_model_message_on_main_thread(message_data)?;
@@ -362,5 +396,36 @@ impl MainView {
 			}
 			_ => false
 		}
+	}
+
+	fn reposition_views(&self, width: c_int, height: c_int) -> Result<(), WinApiError> {
+		let style = try_call!(GetWindowLongW(self.main_window, GWL_STYLE), 0) as DWORD;
+		let extended_style = try_call!(GetWindowLongW(self.main_window, GWL_EXSTYLE), 0) as DWORD;
+		let dpi = unsafe { GetDpiForWindow(self.main_window) };
+
+		let mut rect = RECT {
+			top: 0,
+			left: 0,
+			right: 0,
+			bottom: 0
+		};
+		try_call!(AdjustWindowRectExForDpi(&mut rect as *mut _ as *mut _, style, TRUE, extended_style, dpi), 0);
+
+		let hor_diff = rect.right - rect.left;
+		let client_area_width = width - hor_diff;
+		let vert_diff = rect.bottom - rect.top;
+		let client_area_height = height - vert_diff;
+
+		try_call!(SetWindowPos(self.branches_list_box, null_mut(), 0, 0, MainView::BRANCHES_WIDTH, client_area_height - 2 * MainView::EDGE_MARGIN - MainView::LABEL_HEIGHT, SWP_NOMOVE), 0);
+
+		let patches_height = (client_area_height  - 2 * (MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT)) / 2;
+		let commits_and_patches_hor_pos = client_area_width - MainView::COMMIT_AND_PATCH_HOR_POSITION - MainView::EDGE_MARGIN;
+		let commits_vert_pos = MainView::EDGE_MARGIN + 2 * MainView::LABEL_HEIGHT + patches_height;
+		try_call!(SetWindowPos(self.combined_patches_list_box, null_mut(), 0, 0, commits_and_patches_hor_pos, patches_height, SWP_NOMOVE), 0);
+		try_call!(SetWindowPos(self.commits_list_box, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos, commits_and_patches_hor_pos,
+				client_area_height - commits_vert_pos - MainView::EDGE_MARGIN, 0), 0);
+		try_call!(SetWindowPos(self.commits_label, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos - MainView::LABEL_HEIGHT,
+				MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, 0), 0);
+		Ok(())
 	}
 }
