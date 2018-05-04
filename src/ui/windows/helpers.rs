@@ -3,6 +3,8 @@ use std::ops::{Deref, DerefMut};
 use std::os::windows::ffi::{OsStringExt, OsStrExt};
 use std::ptr::null_mut;
 use std::slice;
+use std::result::Result::Ok;
+
 use winapi::Interface;
 use winapi::shared::ntdef::PWSTR;
 use winapi::shared::minwindef::HINSTANCE;
@@ -11,7 +13,7 @@ use winapi::um::combaseapi::CoTaskMemFree;
 use winapi::um::unknwnbase::IUnknown;
 use winapi::um::winuser::{LoadMenuW, DestroyMenu};
 use libc::wcslen;
-use std::result::Result::Ok;
+use failure::Backtrace;
 
 macro_rules! try_com {
 	($($call:ident).+($($args:tt)*)) => {
@@ -56,7 +58,7 @@ macro_rules! try_com {
 		unsafe {
 			let result = $($call)*($($parsed_args)*);
 			if result != S_OK {
-				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(result as u64))
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(result as u64, ::failure::Backtrace::new()))
 			}
 		}
 	};
@@ -67,7 +69,7 @@ macro_rules! try_get {
 		unsafe {
 			let result = $($call).*($($args),*);
 			if result.is_null() {
-				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64));
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64, ::failure::Backtrace::new()));
 			}
 			result
 		}
@@ -79,7 +81,7 @@ macro_rules! try_call {
 		unsafe {
 			let result = $($call).*($($args),*);
 			if result == $error_value {
-				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64));
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64, ::failure::Backtrace::new()));
 			}
 			result
 		}
@@ -97,7 +99,7 @@ macro_rules! try_send_message {
 			let result = ::winapi::um::winuser::SendMessageW($($args),*);
 			$(
 				if result == $error_value {
-					return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(result as u64));
+					return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(result as u64, ::failure::Backtrace::new()));
 				}
 			)*
 			result
@@ -210,11 +212,11 @@ impl<T> DerefMut for ComMemPtr<T> {
 
 #[derive(Fail, Debug)]
 #[fail(display = "Win API call failed, error {}", _0)]
-pub struct WinApiError(pub u64);
+pub struct WinApiError(pub u64, pub Backtrace);
 
 impl From<isize> for WinApiError {
 	fn from(code: isize) -> WinApiError {
-		WinApiError(code as u64)
+		WinApiError(code as u64, Backtrace::new())
 	}
 }
 
