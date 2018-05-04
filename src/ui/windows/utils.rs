@@ -1,15 +1,15 @@
 use std::mem;
+use std::ptr::null_mut;
 
 use winapi::shared::minwindef::{DWORD, UINT, LPARAM, BOOL, TRUE, WPARAM};
 use winapi::shared::windef::{HWND, RECT};
-use winapi::um::winuser::{WM_SETFONT, SPI_GETNONCLIENTMETRICS, GetWindowRect, SendMessageW, EnumChildWindows};
+use winapi::um::winuser::{WM_SETFONT, SPI_GETNONCLIENTMETRICS, GetWindowRect, SendMessageW, EnumChildWindows, MapWindowPoints};
 use winapi::um::wingdi::CreateFontIndirectW;
+use winapi::um::errhandlingapi::{SetLastError, GetLastError};
+use failure::Backtrace;
 
 use ui::windows::dpi::{GetDpiForWindow, NONCLIENTMETRICS, SystemParametersInfoForDpi};
 use ui::windows::helpers::WinApiError;
-use winapi::um::winuser::MapWindowPoints;
-use std::ptr::null_mut;
-use winapi::um::errhandlingapi::{SetLastError, GetLastError};
 
 pub fn set_fonts(main_window: HWND) -> Result<(), WinApiError> {
 	let dpi = try_call!(GetDpiForWindow(main_window), 0);
@@ -50,7 +50,7 @@ pub fn get_window_position(window: HWND, reference_window: HWND) -> Result<RECT,
 			if result == 0 {
 				let error = GetLastError();
 				if error != 0 {
-					return Err(WinApiError(error as u64));
+					return Err(WinApiError(error as u64, Backtrace::new()));
 				}
 			}
 		}

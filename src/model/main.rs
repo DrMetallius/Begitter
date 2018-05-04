@@ -1,10 +1,12 @@
-use git::{Git, GitError};
 use std::ffi::OsStr;
 use std::thread;
 use std::sync;
 use std::sync::Arc;
 use std::ffi::OsString;
-use failure;
+
+use failure::{self, Backtrace};
+
+use git::Git;
 use change_set::{Commit, CombinedPatch, ChangeSetInfo};
 use patch_editor::parser::parse_combined_patch;
 
@@ -87,7 +89,8 @@ impl MainModel {
 							match result {
 								Err(ref err) if err.to_status() == Some(1) => (),
 								Err(err) => return Err(err.into()),
-								Ok(()) => return Err(MainModelError::ApplyPatchesError(String::from("Expected to have conflicts, but none found")).into())
+								Ok(()) => return Err(MainModelError::ApplyPatchesError(String::from("Expected to have conflicts, but none found"),
+									Backtrace::new()).into())
 							}
 
 							let conflicts = git.status_conflicts()?;
@@ -151,7 +154,7 @@ impl MainModel {
 #[derive(Fail, Debug)]
 enum MainModelError {
 	#[fail(display = "Error when applying patches: {}", _0)]
-	ApplyPatchesError(String),
+	ApplyPatchesError(String, Backtrace),
 }
 
 pub trait MainViewReceiver: Sync + Send {

@@ -1,13 +1,15 @@
-use nom::ErrorKind;
 use std::process::Command;
-use std::io;
-use std::io::Write;
+use std::io::{self, Write};
 use std::process::{Output, Stdio};
 use std::ffi::{OsStr, OsString};
 use std::string::FromUtf8Error;
+use std::vec::Vec;
+
+use failure::Backtrace;
+
+use nom::ErrorKind;
 
 use super::parsing_utils::file_name;
-use std::vec::Vec;
 
 #[cfg(windows)]
 use {
@@ -45,7 +47,7 @@ impl Git {
 
 	fn read_command_output(output: Output) -> Result<String> {
 		if !output.status.success() {
-			Err(GitError::StatusError(output.status.code(), String::from_utf8(output.stderr).unwrap_or("".into())))
+			Err(GitError::StatusError(output.status.code(), String::from_utf8(output.stderr).unwrap_or("".into()), Backtrace::new()))
 		} else {
 			Ok(String::from_utf8(output.stdout)?)
 		}
@@ -229,19 +231,19 @@ impl Git {
 #[derive(Fail, Debug)]
 pub enum GitError {
 	#[fail(display = "I/O error: {}", _0)]
-	IoError(io::Error),
+	IoError(io::Error, Backtrace),
 	#[fail(display = "Error when parsing Unicode input: {}", _0)]
-	EncodingError(FromUtf8Error),
+	EncodingError(FromUtf8Error, Backtrace),
 	#[fail(display = "Error when parsing the patch data: {}", _0)]
-	ParsingError(ErrorKind),
+	ParsingError(ErrorKind, Backtrace),
 	#[fail(display = "Git failure, status {:?}: {}", _0, _1)]
-	StatusError(Option<i32>, String)
+	StatusError(Option<i32>, String, Backtrace)
 }
 
 impl GitError {
 	pub fn to_status(&self) -> Option<i32> {
 		match *self {
-			GitError::StatusError(status, _) => status.clone(),
+			GitError::StatusError(status, _, _) => status.clone(),
 			_ => None
 		}
 	}
@@ -249,19 +251,19 @@ impl GitError {
 
 impl From<io::Error> for GitError {
 	fn from(error: io::Error) -> Self {
-		GitError::IoError(error)
+		GitError::IoError(error, Backtrace::new())
 	}
 }
 
 impl From<FromUtf8Error> for GitError {
 	fn from(error: FromUtf8Error) -> Self {
-		GitError::EncodingError(error)
+		GitError::EncodingError(error, Backtrace::new())
 	}
 }
 
 impl From<ErrorKind> for GitError {
 	fn from(error: ErrorKind) -> Self {
-		GitError::ParsingError(error)
+		GitError::ParsingError(error, Backtrace::new())
 	}
 }
 
@@ -355,7 +357,7 @@ index 9944a9f..e9459b0 100644
 
 		let result = git.symbolic_ref("HEAD");
 		match result {
-			Err(GitError::StatusError(Some(1), _)) => (),
+			Err(GitError::StatusError(Some(1), _, _)) => (),
 			other => panic!("Symbolic ref is supposed to exit with status 1 when in a detached head state, was {:?}", other)
 		}
 
