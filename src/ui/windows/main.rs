@@ -36,6 +36,7 @@ const MAIN_ACCELERATORS: &str = "main_accelerators";
 
 const ID_MENU_OPEN: WORD = 100;
 const ID_MENU_IMPORT: WORD = 200;
+const ID_MENU_APPLY: WORD = 201;
 
 const MESSAGE_MODEL_TO_MAIN_VIEW: UINT = WM_APP;
 
@@ -313,7 +314,7 @@ impl MainView {
 
 				try_send_message!(self.commits_list_box, LB_RESETCONTENT, 0, 0);
 				for commit in &self.commits {
-					try_send_message!(self.commits_list_box, LB_ADDSTRING, 0, to_wstring(&commit.info.message).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
+					try_send_message!(self.commits_list_box, LB_ADDSTRING, 0, to_wstring(&commit.info.change_set_info.message).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
 				}
 			}
 			MainViewMessage::CombinedPatches(combined_patches) => {
@@ -392,6 +393,11 @@ impl MainView {
 						.map(|commit| commit.clone())
 						.collect();
 				self.model.as_ref().unwrap().import_commits(commits);
+				true
+			}
+			self::ID_MENU_APPLY => {
+				let commit = self.commits[index as usize].clone();
+				self.model.as_ref().unwrap().apply_patches(commit);
 				true
 			}
 			_ => false
