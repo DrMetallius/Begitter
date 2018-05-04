@@ -7,6 +7,7 @@
 
 #define ID_MENU_OPEN 100
 #define ID_MENU_IMPORT 200
+#define ID_MENU_APPLY 201
 
 1 RT_MANIFEST "manifest.xml"
 
@@ -23,6 +24,7 @@ main_commit_menu MENU
     POPUP "Commit"
     {
         MENUITEM "Import from here", ID_MENU_IMPORT
+        MENUITEM "Replace from here", ID_MENU_APPLY
     }
 }
 

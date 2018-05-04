@@ -44,11 +44,10 @@ impl Git {
 	}
 
 	fn read_command_output(output: Output) -> Result<String> {
-		let message = String::from_utf8(output.stdout);
 		if !output.status.success() {
-			Err(GitError::StatusError(output.status.code(), message.unwrap_or("".into())))
+			Err(GitError::StatusError(output.status.code(), String::from_utf8(output.stderr).unwrap_or("".into())))
 		} else {
-			Ok(message?)
+			Ok(String::from_utf8(output.stdout)?)
 		}
 	}
 
@@ -155,7 +154,7 @@ impl Git {
 		self.run_command(&["symbolic-ref", "--quiet", ref_name, target])
 	}
 
-	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<()> {
+	pub fn update_ref(&self, ref_name: &str, object_sha: &str) -> Result<()> { // Can only accept actual objects, refs are no good
 		self.run_command(&["update-ref", "--no-deref", ref_name, object_sha])?;
 		Ok(())
 	}
@@ -171,8 +170,9 @@ impl Git {
 				.collect()
 	}
 
-	pub fn read_tree(&self, commit_spec: &str) -> Result<()> {
-		self.run_command(&["read-tree", commit_spec])?;
+	pub fn read_tree<S: AsRef<str>>(&self, commit_spec: Option<S>) -> Result<()> {
+		let target = commit_spec.as_ref().map_or("--empty", |spec| spec.as_ref() );
+		self.run_command(&["read-tree", target])?;
 		Ok(())
 	}
 
@@ -214,8 +214,14 @@ impl Git {
 		Ok(tree.trim().into())
 	}
 
-	pub fn commit_tree(&self, tree: &str, parent: &str, message: &str) -> Result<String> { // TODO: add author and committer
-		let commit = self.run_command(&["commit-tree", tree, "-p", parent, "-m", message])?;
+	pub fn commit_tree<S: AsRef<str>>(&self, tree: &str, parent: Option<S>, message: &str) -> Result<String> { // TODO: add author and committer
+		let mut args = vec!["commit-tree", tree, "-m", message];
+		if let Some(parent_spec) = parent.as_ref() {
+			args.push("-p");
+			args.push(parent_spec.as_ref());
+		}
+		let commit = self.run_command(args)?;
+
 		Ok(commit.trim().into())
 	}
 }
@@ -230,6 +236,15 @@ pub enum GitError {
 	ParsingError(ErrorKind),
 	#[fail(display = "Git failure, status {:?}: {}", _0, _1)]
 	StatusError(Option<i32>, String)
+}
+
+impl GitError {
+	pub fn to_status(&self) -> Option<i32> {
+		match *self {
+			GitError::StatusError(status, _) => status.clone(),
+			_ => None
+		}
+	}
 }
 
 impl From<io::Error> for GitError {
@@ -251,7 +266,7 @@ impl From<ErrorKind> for GitError {
 }
 
 #[cfg(test)]
-mod test {
+mod test { // TODO: undo marking variables as unused, this breaks stuff
 	use super::*;
 	use std::path::{Path, PathBuf};
 	use std::env::var;
@@ -305,7 +320,7 @@ index 9944a9f..e9459b0 100644
 	fn apply_patch_with_conflicts(git: &Git) {
 		let target_commit = git.show_ref("conflict-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
-		git.read_tree("refs/tags/conflict-tests").unwrap();
+		git.read_tree(Some("refs/tags/conflict-tests")).unwrap();
 		git.checkout_index().unwrap();
 
 		let apply_result = git.apply(PATCH, true);
@@ -353,10 +368,10 @@ index 9944a9f..e9459b0 100644
 	fn test_read_tree() {
 		let (git, _temp_dir) = create_git();
 
-		git.read_tree("refs/heads/test-branch").unwrap();
+		git.read_tree(Some("refs/heads/test-branch")).unwrap();
 		assert!(git.diff_index_names("refs/heads/test-branch").unwrap().is_empty());
 
-		git.read_tree("refs/tags/reading-tests").unwrap();
+		git.read_tree(Some("refs/tags/reading-tests")).unwrap();
 		assert!(!git.diff_index_names("refs/heads/test-branch").unwrap().is_empty());
 	}
 
@@ -389,8 +404,8 @@ index afe0cb3..9944a9f 100644
 
 	#[test]
 	fn test_apply() {
-		let (git, _) = create_git();
-		git.read_tree("refs/tags/reading-tests").unwrap();
+		let (git, dir) = create_git();
+		git.read_tree(Some("refs/tags/reading-tests")).unwrap();
 		git.apply(PATCH, false).unwrap();
 
 		assert!(!git.diff_index_names("refs/tags/reading-tests").unwrap().is_empty());
@@ -427,9 +442,9 @@ index afe0cb3..9944a9f 100644
 
 		let target_commit = git.show_ref("conflict-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
-		git.read_tree("refs/tags/conflict-tests").unwrap();
+		git.read_tree(Some("refs/tags/conflict-tests")).unwrap();
 
 		let tree = git.write_tree().unwrap();
-		git.commit_tree(&tree, &target_commit, "Test commit").unwrap();
+		git.commit_tree(&tree, Some(&target_commit), "Test commit").unwrap();
 	}
 }

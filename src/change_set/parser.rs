@@ -1,13 +1,13 @@
 use super::ChangeSetInfo;
 use nom::{IResult, IResult::Done, ErrorKind, FindSubstring, Slice, is_space, is_hex_digit, newline, rest};
 use failure;
-use change_set::PersonAction;
+use change_set::{PersonAction, CommitInfo};
 use time::Timespec;
 
 const ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO: u32 = 0;
 
 named!(
-	pub parse_commit_info<ChangeSetInfo>,
+	pub parse_commit_info<CommitInfo>,
 	do_parse!(
 		properties: many1!(property) >>
 		newline >>
@@ -17,11 +17,15 @@ named!(
 	)
 );
 
-fn change_set_info_from_properties(properties: &[CommitProperty], message: &[u8]) -> Result<ChangeSetInfo, failure::Error> {
-	let mut change_set = ChangeSetInfo {
-		author_action: PersonAction::default(),
-		committer_action: PersonAction::default(),
-		message: String::from_utf8(message.into())?,
+fn change_set_info_from_properties(properties: &[CommitProperty], message: &[u8]) -> Result<CommitInfo, failure::Error> {
+	let mut commit_info = CommitInfo {
+		change_set_info: ChangeSetInfo {
+			author_action: PersonAction::default(),
+			committer_action: PersonAction::default(),
+			message: String::from_utf8(message.into())?,
+		},
+		tree: String::default(),
+		parent: None,
 	};
 
 	fn person_action_from_property(name: &[u8], time: i64, time_zone: i32) -> Result<PersonAction, failure::Error> {
@@ -34,13 +38,14 @@ fn change_set_info_from_properties(properties: &[CommitProperty], message: &[u8]
 
 	for property in properties {
 		match property {
-			&CommitProperty::Tree(_) | &CommitProperty::Parent(_) => (),
-			&CommitProperty::Author(name, time, time_zone) => change_set.author_action = person_action_from_property(name, time, time_zone)?,
-			&CommitProperty::Committer(name, time, time_zone) => change_set.committer_action = person_action_from_property(name, time, time_zone)?
+			&CommitProperty::Tree(tree) => commit_info.tree = String::from_utf8(tree.into())?,
+			&CommitProperty::Parent(parent) => commit_info.parent = Some(String::from_utf8(parent.into())?),
+			&CommitProperty::Author(name, time, time_zone) => commit_info.change_set_info.author_action = person_action_from_property(name, time, time_zone)?,
+			&CommitProperty::Committer(name, time, time_zone) => commit_info.change_set_info.committer_action = person_action_from_property(name, time, time_zone)?
 		}
 	}
 
-	Ok(change_set)
+	Ok(commit_info)
 }
 
 enum CommitProperty<'a> {
@@ -96,18 +101,22 @@ committer Alexander Gazarov <drmetallius@gmail.com> 1523207822 +0300
 Это проверка
 ".as_bytes();
 		let result = parse_commit_info(data).to_result().unwrap();
-		assert_eq!(result, ChangeSetInfo {
-			author_action: PersonAction {
-				name: String::from("Один чувак <абырвалг@example.com>"),
-				time: Timespec { sec: 1523207666, nsec: 0 },
-				time_zone: 300,
+		assert_eq!(result, CommitInfo {
+			change_set_info: ChangeSetInfo {
+				author_action: PersonAction {
+					name: String::from("Один чувак <абырвалг@example.com>"),
+					time: Timespec { sec: 1523207666, nsec: 0 },
+					time_zone: 300,
+				},
+				committer_action: PersonAction {
+					name: String::from("Alexander Gazarov <drmetallius@gmail.com>"),
+					time: Timespec { sec: 1523207822, nsec: 0 },
+					time_zone: 300,
+				},
+				message: String::from("Это проверка\n"),
 			},
-			committer_action: PersonAction {
-				name: String::from("Alexander Gazarov <drmetallius@gmail.com>"),
-				time: Timespec { sec: 1523207822, nsec: 0 },
-				time_zone: 300,
-			},
-			message: String::from("Это проверка\n")
+			tree: String::from("90f8bfa9fb9053b2004907c50c8cf57a31ea6aed"),
+			parent: Some(String::from("6f522f142a4fa563b871796fad4d46f822745cf3"))
 		});
 	}
 }

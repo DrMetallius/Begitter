@@ -3,16 +3,33 @@ mod parser;
 use time::{self, Timespec};
 use patch_editor::patch::Patch;
 use failure;
+use std::io::{Error, Write};
 
 pub struct CombinedPatch {
 	pub info: ChangeSetInfo,
 	pub patches: Vec<Patch>
 }
 
+impl CombinedPatch {
+	pub fn write<W: Write>(&self, write: &mut W) -> Result<(), Error> {
+		self.patches
+				.iter()
+				.map(|patch| patch.write(write))
+				.collect()
+	}
+}
+
 #[derive(Clone)]
 pub struct Commit {
 	pub hash: String,
-	pub info: ChangeSetInfo
+	pub info: CommitInfo
+}
+
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct CommitInfo {
+	pub change_set_info: ChangeSetInfo,
+	pub tree: String,
+	pub parent: Option<String>
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
