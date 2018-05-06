@@ -41,9 +41,9 @@ pub struct ChangeSetInfo {
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct PersonAction {
-	name: String,
-	time: Timespec,
-	time_zone: i32 // Offset in seconds from UTC
+	pub name: String,
+	pub time: Timespec,
+	pub time_zone: i32 // Offset in seconds from UTC
 }
 
 impl Default for PersonAction {

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::mem;
 
 use failure;
+use time;
 use winapi::Interface;
 use winapi::ctypes::c_int;
 use winapi::shared::guiddef::GUID;
@@ -23,7 +24,7 @@ use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, Create
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 use winapi::um::commctrl::{self, WC_TREEVIEW, WC_LISTBOX, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
-	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE};
+	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, LVM_INSERTCOLUMNW, NMLVDISPINFOW, NMITEMACTIVATE};
 
 use super::helpers::*;
 use begitter::model::main::{MainModel, MainViewReceiver};
@@ -32,6 +33,24 @@ use begitter::model::main::BranchItem;
 use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
 use ui::windows::utils::{set_fonts, get_window_position};
 use ui::windows::dpi::GetDpiForWindow;
+use winapi::um::commctrl::WC_LISTVIEW;
+use winapi::um::commctrl::LVM_DELETEALLITEMS;
+use winapi::um::commctrl::LVCF_TEXT;
+use winapi::um::commctrl::LVCF_SUBITEM;
+use winapi::um::commctrl::LVCOLUMNW;
+use ui::windows::text::STRING_MAIN_COMMITS_COLUMNS;
+use winapi::um::commctrl::LVCF_WIDTH;
+use winapi::um::commctrl::LVIF_TEXT;
+use winapi::um::commctrl::LPSTR_TEXTCALLBACKW;
+use winapi::um::commctrl::LVM_INSERTITEMW;
+use winapi::um::commctrl::LVITEMW;
+use winapi::um::commctrl::LVN_GETDISPINFOW;
+use winapi::um::commctrl::LVS_REPORT;
+use winapi::um::commctrl::LVS_LIST;
+use winapi::um::commctrl::LVIF_COLUMNS;
+use winapi::um::commctrl::LVCF_FMT;
+use winapi::um::commctrl::LVCFMT_LEFT;
+use winapi::um::commctrl::LVIF_STATE;
 
 const MAIN_CLASS: &str = "main";
 
@@ -230,12 +249,13 @@ struct MainView {
 	main_window: HWND,
 	commits_label: HWND,
 	branches_tree_view: HWND,
-	commits_list_box: HWND,
+	commits_list_view: HWND,
 	combined_patches_list_box: HWND,
 
 	branches: Vec<BranchItem>,
 	active_branch: Option<String>,
 	commits: Vec<Commit>,
+	commit_strings: Vec<Vec<Vec<u16>>>,
 	combined_patches: Vec<ChangeSetInfo>,
 }
 
@@ -251,6 +271,7 @@ impl MainView {
 		let static_class = to_wstring(WC_STATIC);
 		let tree_view_class = to_wstring(WC_TREEVIEW);
 		let list_box_class = to_wstring(WC_LISTBOX);
+		let list_view_class = to_wstring(WC_LISTVIEW);
 
 		let branches_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD,
 				MainView::EDGE_MARGIN, MainView::EDGE_MARGIN, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -272,8 +293,21 @@ impl MainView {
 		let combined_patches_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
 				MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
-		let commits_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
+		let commits_list_view = try_get!(CreateWindowExW(0, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | WS_VSCROLL,
 				0, 0, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+
+		let mut column: LVCOLUMNW = unsafe { mem::zeroed() };
+		column.mask = LVCF_TEXT | LVCF_SUBITEM | LVCF_WIDTH | LVCF_FMT;
+
+		for (index, text_id) in STRING_MAIN_COMMITS_COLUMNS.enumerate() {
+
+			let mut name = load_string(text_id)?;
+			column.fmt = LVCFMT_LEFT;
+			column.iSubItem = index as c_int;
+			column.pszText = name.as_mut_ptr();
+			column.cx = 200;
+			try_send_message!(commits_list_view, LVM_INSERTCOLUMNW, index, &mut column as *mut _ as LPARAM; -1);
+		}
 
 		set_fonts(main_window)?;
 
@@ -283,11 +317,12 @@ impl MainView {
 			commits_label,
 			branches_tree_view,
 			combined_patches_list_box,
-			commits_list_box,
+			commits_list_view,
 			branches: Vec::new(),
 			active_branch: None,
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
+			commit_strings: Vec::new(),
 		};
 
 		let rect = get_window_position(main_window, main_window)?;
@@ -315,10 +350,30 @@ impl MainView {
 			}
 			MainViewMessage::Commits(commits) => {
 				self.commits = commits;
+				self.commit_strings.clear();
 
-				try_send_message!(self.commits_list_box, LB_RESETCONTENT, 0, 0);
-				for commit in &self.commits {
-					try_send_message!(self.commits_list_box, LB_ADDSTRING, 0, to_wstring(&commit.info.change_set_info.message).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
+				try_send_message!(self.commits_list_view, LVM_DELETEALLITEMS, 0, 0);
+
+				let mut item: LVITEMW = unsafe { mem::zeroed() };
+				item.mask = LVIF_TEXT | LVIF_STATE;
+				item.pszText = LPSTR_TEXTCALLBACKW;
+				item.iSubItem = 0;
+				item.state = 0;
+				item.stateMask = 0;
+
+				for (commit_index, commit) in self.commits.iter().enumerate() {
+					let commit_time = time::strftime("%Y-%m-%d %H:%M:%S", &time::at(commit.info.change_set_info.author_action.time.clone())).unwrap();
+					let strings = vec![&commit.info.change_set_info.message,
+						&commit.info.change_set_info.author_action.name,
+						&commit_time,
+						&commit.hash]
+							.into_iter()
+							.map(|string| to_wstring(&string))
+							.collect();
+					self.commit_strings.push(strings);
+
+					item.iItem = commit_index as c_int;
+					try_send_message!(self.commits_list_view, LVM_INSERTITEMW, 0, &item as *const _ as LPARAM; -1);
 				}
 			}
 			MainViewMessage::CombinedPatches(combined_patches) => {
@@ -377,13 +432,6 @@ impl MainView {
 
 	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
 		let handled = match message_data.message {
-			winuser::WM_CONTEXTMENU => {
-				if message_data.w_param as HWND == self.commits_list_box {
-					self.on_commit_right_click(message_data)
-				} else {
-					false
-				}
-			}
 			winuser::WM_SIZING => {
 				let rect = unsafe { *(message_data.l_param as *const RECT) };
 				let width = rect.right - rect.left;
@@ -397,6 +445,23 @@ impl MainView {
 					commctrl::NM_DBLCLK => {
 						if header.hwndFrom == self.branches_tree_view {
 							self.on_branch_double_click()?
+						} else {
+							false
+						}
+					}
+					commctrl::NM_RCLICK => {
+						if header.hwndFrom == self.commits_list_view {
+							let info = unsafe { (message_data.l_param as *const NMITEMACTIVATE).as_ref().unwrap() };
+							self.on_commit_right_click(&info)
+						} else {
+							false
+						}
+					}
+					commctrl::LVN_GETDISPINFOW => {
+						if header.hwndFrom == self.commits_list_view {
+							let mut info = unsafe { (message_data.l_param as *mut NMLVDISPINFOW).as_mut().unwrap() };
+							info.item.pszText = self.commit_strings[info.item.iItem as usize][info.item.iSubItem as usize].as_mut_ptr();
+							true
 						} else {
 							false
 						}
@@ -429,25 +494,17 @@ impl MainView {
 		Ok(true)
 	}
 
-	fn on_commit_right_click(&self, message_data: &MessageData) -> bool {
-		let x = GET_X_LPARAM(message_data.l_param);
-		let y = GET_Y_LPARAM(message_data.l_param);
-		let POINT { x: translated_x, y: translated_y } = {
-			let mut point = POINT { x, y };
+	fn on_commit_right_click(&self, info: &NMITEMACTIVATE) -> bool {
+		if info.iItem < 0 { return false; }
+
+		let POINT { x, y } = {
+			let mut point = info.ptAction;
+			println!("{}, {}", point.x, point.y);
 			unsafe {
-				MapWindowPoints(null_mut(), self.commits_list_box, &mut point as *mut _, 1);
+				MapWindowPoints(self.commits_list_view, self.main_window, &mut point as *mut _, 1);
 			}
 			point
 		};
-
-		let result = try_send_message!(self.commits_list_box, LB_ITEMFROMPOINT, 0, MAKELONG(translated_x as u16, translated_y as u16) as LPARAM) as u32;
-		let index = LOWORD(result);
-		let outside = HIWORD(result) != 0;
-		if outside {
-			return false;
-		}
-
-		try_send_message!(self.commits_list_box, LB_SETCURSEL, index as usize, 0) as u32;
 
 		let context_menu = MenuHandle::load(MANI_MENU_COMMIT).unwrap();
 		let result = unsafe {
@@ -457,12 +514,12 @@ impl MainView {
 				panic!("{} is an invalid menu position", position);
 			}
 			TrackPopupMenuEx(popup, TPM_RETURNCMD | TPM_TOPALIGN | TPM_LEFTALIGN,
-				x, y, self.main_window, null_mut()) as WORD
+					x, y, self.main_window, null_mut()) as WORD
 		};
 
 		match result {
 			self::ID_MENU_IMPORT => {
-				let commits: Vec<Commit> = self.commits[0..index as usize + 1]
+				let commits: Vec<Commit> = self.commits[0..info.iItem as usize + 1]
 						.iter()
 						.map(|commit| commit.clone())
 						.collect();
@@ -470,7 +527,7 @@ impl MainView {
 				true
 			}
 			self::ID_MENU_APPLY => {
-				let commit = self.commits[index as usize].clone();
+				let commit = self.commits[info.iItem as usize].clone();
 				self.model.as_ref().unwrap().apply_patches(commit);
 				true
 			}
@@ -502,7 +559,7 @@ impl MainView {
 		let commits_and_patches_hor_pos = client_area_width - MainView::COMMIT_AND_PATCH_HOR_POSITION - MainView::EDGE_MARGIN;
 		let commits_vert_pos = MainView::EDGE_MARGIN + 2 * MainView::LABEL_HEIGHT + patches_height;
 		try_call!(SetWindowPos(self.combined_patches_list_box, null_mut(), 0, 0, commits_and_patches_hor_pos, patches_height, SWP_NOMOVE), 0);
-		try_call!(SetWindowPos(self.commits_list_box, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos, commits_and_patches_hor_pos,
+		try_call!(SetWindowPos(self.commits_list_view, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos, commits_and_patches_hor_pos,
 				client_area_height - commits_vert_pos - MainView::EDGE_MARGIN, 0), 0);
 		try_call!(SetWindowPos(self.commits_label, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos - MainView::LABEL_HEIGHT,
 				MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, 0), 0);

@@ -8,6 +8,7 @@ extern crate libc;
 #[cfg(windows)]
 extern crate winapi;
 extern crate core;
+extern crate time;
 
 mod ui;
 
