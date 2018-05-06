@@ -15,6 +15,7 @@ enum Command {
 	GetBranches,
 	ImportCommits(Vec<Commit>),
 	ApplyCommits(Commit),
+	SwitchToBranch(String)
 }
 
 pub struct MainModel {
@@ -121,6 +122,10 @@ impl MainModel {
 
 				MainModel::get_branches_and_commits(view, git, combined_patches)?;
 			}
+			Command::SwitchToBranch(ref_name) => {
+				git.symbolic_ref_update("HEAD", &ref_name)?;
+				MainModel::get_branches_and_commits(view, git, combined_patches)?;
+			}
 		}
 		Ok(())
 	}
@@ -157,6 +162,10 @@ impl MainModel {
 
 	pub fn apply_patches(&self, first_commit_to_replace: Commit) {
 		self.worker_sink.send(Command::ApplyCommits(first_commit_to_replace)).unwrap();
+	}
+
+	pub fn switch_to_branch(&self, ref_name: &str) {
+		self.worker_sink.send(Command::SwitchToBranch(String::from(ref_name))).unwrap();
 	}
 }
 
