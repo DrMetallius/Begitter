@@ -20,6 +20,8 @@ use {
 const COMMAND: &str = "git";
 const STATUS_PORCELAIN_V2_COLUMNS: usize = 11;
 
+pub const BRANCH_PREFIX: &str = "refs/heads/";
+
 pub type Result<T> = ::std::result::Result<T, GitError>;
 
 pub struct Git {

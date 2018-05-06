@@ -1,5 +1,6 @@
 use std::ptr::null_mut;
 use std::sync::Arc;
+use std::mem;
 
 use failure;
 use winapi::Interface;
@@ -27,6 +28,24 @@ use begitter::change_set::{Commit, ChangeSetInfo};
 use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
 use ui::windows::utils::{set_fonts, get_window_position};
 use ui::windows::dpi::GetDpiForWindow;
+use winapi::um::commctrl::WC_TREEVIEW;
+use winapi::um::commctrl::WC_LISTBOX;
+use winapi::um::commctrl::WC_STATIC;
+use winapi::um::commctrl::TVS_HASLINES;
+use winapi::um::commctrl::{TVM_INSERTITEMW, TVINSERTSTRUCTW};
+use winapi::shared::ntdef::NULL;
+use winapi::um::commctrl::TVI_SORT;
+use winapi::um::commctrl::TVIF_TEXT;
+use winapi::um::commctrl::TVM_DELETEITEM;
+use winapi::um::commctrl::TVI_ROOT;
+use begitter::model::main::BranchItem;
+use winapi::um::commctrl::TVIF_CHILDREN;
+use winapi::um::commctrl::HTREEITEM;
+use winapi::um::commctrl::TVIF_STATE;
+use winapi::um::commctrl::TVIS_BOLD;
+use winapi::um::commctrl::TVS_HASBUTTONS;
+use winapi::um::commctrl::TVS_LINESATROOT;
+use winapi::um::commctrl::TVIS_EXPANDED;
 
 const MAIN_CLASS: &str = "main";
 
@@ -136,10 +155,10 @@ pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, 
 							h_wnd,
 							message,
 							w_param,
-							l_param
+							l_param,
 						};
 						view.receive_message(&message_data).unwrap()
-					},
+					}
 					None => false
 				}
 			};
@@ -200,8 +219,8 @@ impl MainViewReceiver for MainViewRelay {
 		println!("We've got an error: {}\n{}", error, error.backtrace()); // TODO: this is not proper error handling
 	}
 
-	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), failure::Error> {
-		self.post_on_main_thread(MainViewMessage::Branches(branches, active_branch)).map_err(|err| err.into())
+	fn show_branches(&self, branches: Vec<BranchItem>) -> Result<(), failure::Error> {
+		self.post_on_main_thread(MainViewMessage::Branches(branches)).map_err(|err| err.into())
 	}
 
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error> {
@@ -214,7 +233,7 @@ impl MainViewReceiver for MainViewRelay {
 }
 
 enum MainViewMessage {
-	Branches(Vec<String>, String),
+	Branches(Vec<BranchItem>),
 	Commits(Vec<Commit>),
 	CombinedPatches(Vec<ChangeSetInfo>),
 }
@@ -224,11 +243,11 @@ struct MainView {
 
 	main_window: HWND,
 	commits_label: HWND,
-	branches_list_box: HWND,
+	branches_tree_view: HWND,
 	commits_list_box: HWND,
 	combined_patches_list_box: HWND,
 
-	branches: Vec<String>,
+	branches: Vec<BranchItem>,
 	active_branch: Option<String>,
 	commits: Vec<Commit>,
 	combined_patches: Vec<ChangeSetInfo>,
@@ -243,8 +262,9 @@ impl MainView {
 	const LABEL_HEIGHT: c_int = 25;
 
 	fn initialize(main_window: HWND) -> Result<MainView, WinApiError> {
-		let static_class = to_wstring("STATIC");
-		let list_box_class = to_wstring("LISTBOX");
+		let static_class = to_wstring(WC_STATIC);
+		let tree_view_class = to_wstring(WC_TREEVIEW);
+		let list_box_class = to_wstring(WC_LISTBOX);
 
 		let branches_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD,
 				MainView::EDGE_MARGIN, MainView::EDGE_MARGIN, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -259,9 +279,9 @@ impl MainView {
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		try_call!(SetWindowTextW(commits_label, load_string(STRING_MAIN_COMMITS)?.as_ptr()), 0);
 
-		let branches_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-				MainView::EDGE_MARGIN, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
-		try_call!(SetWindowTextW(branches_label, load_string(STRING_MAIN_BRANCHES)?.as_ptr()), 0);
+		let branches_tree_view = try_get!(CreateWindowExW(0, tree_view_class.as_ptr(), null_mut(), TVS_LINESATROOT | TVS_HASBUTTONS | TVS_HASLINES | WS_TABSTOP | WS_BORDER |
+				WS_VISIBLE | WS_CHILD | WS_VSCROLL, MainView::EDGE_MARGIN, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0,
+				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
 		let combined_patches_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
 				MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -275,7 +295,7 @@ impl MainView {
 			model: None,
 			main_window,
 			commits_label,
-			branches_list_box,
+			branches_tree_view,
 			combined_patches_list_box,
 			commits_list_box,
 			branches: Vec::new(),
@@ -301,13 +321,11 @@ impl MainView {
 		};
 
 		match arguments {
-			MainViewMessage::Branches(branches, active_branch) => {
+			MainViewMessage::Branches(branches) => {
 				self.branches = branches;
 
-				try_send_message!(self.branches_list_box, LB_RESETCONTENT, 0, 0);
-				for branch_name in &self.branches {
-					try_send_message!(self.branches_list_box, LB_ADDSTRING, 0, to_wstring(&branch_name).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
-				}
+				try_send_message!(self.branches_tree_view, TVM_DELETEITEM, 0, TVI_ROOT as LPARAM; 0);
+				self.view_branches_recursively(&self.branches, null_mut())?;
 			}
 			MainViewMessage::Commits(commits) => {
 				self.commits = commits;
@@ -325,6 +343,46 @@ impl MainView {
 					try_send_message!(self.combined_patches_list_box, LB_ADDSTRING, 0, to_wstring(&info.message).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
 				}
 			}
+		}
+
+		Ok(())
+	}
+
+	fn view_branches_recursively(&self, branches: &Vec<BranchItem>, parent: HTREEITEM) -> Result<(), WinApiError> {
+		for branch in branches {
+			fn insert_item(branches_tree_view: HWND, name: &mut Vec<u16>, has_children: bool, bold: bool, expanded: bool,
+						parent: HTREEITEM) -> Result<HTREEITEM, WinApiError> {
+				let mut item = TVINSERTSTRUCTW {
+					hInsertAfter: TVI_SORT,
+					hParent: parent,
+					u: unsafe { mem::zeroed() },
+				};
+
+				{
+					let item_info = unsafe { item.u.itemex_mut() };
+					item_info.mask = TVIF_TEXT | TVIF_CHILDREN | TVIF_STATE;
+					item_info.pszText = name.as_mut_ptr();
+					item_info.cchTextMax = name.len() as i32;
+					item_info.cChildren = if has_children { 1 } else { 0 };
+					item_info.state = if bold { TVIS_BOLD } else { 0 } | if expanded { TVIS_EXPANDED } else { 0 };
+					item_info.stateMask = TVIS_BOLD | TVIS_EXPANDED;
+				}
+
+				let item_handle = try_send_message!(branches_tree_view, TVM_INSERTITEMW, 0, &item as *const _ as LPARAM; 0);
+				Ok(item_handle as HTREEITEM)
+			}
+
+			match *branch {
+				BranchItem::Folder { display_name: ref display_name, children: ref children, has_active_child } => {
+					let mut branch_name_str = to_wstring(display_name.as_str());
+					let handle = insert_item(self.branches_tree_view, &mut branch_name_str, true, false, has_active_child, parent)?;
+					self.view_branches_recursively(children, handle)?;
+				}
+				BranchItem::Branch { display_name: ref display_name, active, .. } => {
+					let mut branch_name_str = to_wstring(display_name.as_str());
+					insert_item(self.branches_tree_view, &mut branch_name_str, false, active, false, parent)?;
+				}
+			};
 		}
 
 		Ok(())
@@ -413,7 +471,7 @@ impl MainView {
 			top: 0,
 			left: 0,
 			right: 0,
-			bottom: 0
+			bottom: 0,
 		};
 		try_call!(AdjustWindowRectExForDpi(&mut rect as *mut _ as *mut _, style, TRUE, extended_style, dpi), 0);
 
@@ -422,9 +480,9 @@ impl MainView {
 		let vert_diff = rect.bottom - rect.top;
 		let client_area_height = height - vert_diff;
 
-		try_call!(SetWindowPos(self.branches_list_box, null_mut(), 0, 0, MainView::BRANCHES_WIDTH, client_area_height - 2 * MainView::EDGE_MARGIN - MainView::LABEL_HEIGHT, SWP_NOMOVE), 0);
+		try_call!(SetWindowPos(self.branches_tree_view, null_mut(), 0, 0, MainView::BRANCHES_WIDTH, client_area_height - 2 * MainView::EDGE_MARGIN - MainView::LABEL_HEIGHT, SWP_NOMOVE), 0);
 
-		let patches_height = (client_area_height  - 2 * (MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT)) / 2;
+		let patches_height = (client_area_height - 2 * (MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT)) / 2;
 		let commits_and_patches_hor_pos = client_area_width - MainView::COMMIT_AND_PATCH_HOR_POSITION - MainView::EDGE_MARGIN;
 		let commits_vert_pos = MainView::EDGE_MARGIN + 2 * MainView::LABEL_HEIGHT + patches_height;
 		try_call!(SetWindowPos(self.combined_patches_list_box, null_mut(), 0, 0, commits_and_patches_hor_pos, patches_height, SWP_NOMOVE), 0);
