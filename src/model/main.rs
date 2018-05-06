@@ -6,9 +6,10 @@ use std::ffi::OsString;
 
 use failure::{self, Backtrace};
 
-use git::Git;
+use git::{self, Git};
 use change_set::{Commit, CombinedPatch, ChangeSetInfo};
 use patch_editor::parser::parse_combined_patch;
+use std::collections::HashMap;
 
 enum Command {
 	GetBranches,
@@ -112,7 +113,7 @@ impl MainModel {
 					applied_patches += 1;
 				}
 
-				git.update_ref(&active_branch, &target_commit.unwrap());
+				git.update_ref(&active_branch, &target_commit.unwrap())?;
 				git.symbolic_ref_update("HEAD", &active_branch)?;
 
 				let patches_left = combined_patches.len() - applied_patches;
@@ -126,8 +127,16 @@ impl MainModel {
 
 	fn get_branches_and_commits(view: &MainViewReceiver, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>) -> Result<(), failure::Error> {
 		let refs = git.show_refs_heads()?;
-		let active = git.symbolic_ref("HEAD")?;
-		view.show_branches(refs, active)?;
+		let unprocessed_parts_to_refs= refs
+				.iter()
+				.filter(|ref_name| ref_name.starts_with(git::BRANCH_PREFIX))
+				.map(|ref_name| (&ref_name[git::BRANCH_PREFIX.len()..], ref_name.as_str()))
+				.collect();
+
+		let head_target = git.symbolic_ref("HEAD")?;
+		let active_branch = if head_target.starts_with(git::BRANCH_PREFIX) { Some(head_target.as_str()) } else { None };
+
+		view.show_branches(BranchItem::from_refs(unprocessed_parts_to_refs, &active_branch))?;
 
 		let merges = git.rev_list(None, true)?;
 		let commit_hashes = git.rev_list(if merges.is_empty() { None } else { Some(&merges[0]) }, false)?;
@@ -159,7 +168,75 @@ enum MainModelError {
 
 pub trait MainViewReceiver: Sync + Send {
 	fn error(&self, error: failure::Error);
-	fn show_branches(&self, branches: Vec<String>, active_branch: String) -> Result<(), failure::Error>;
+	fn show_branches(&self, branches: Vec<BranchItem>) -> Result<(), failure::Error>;
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error>;
 	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error>;
+}
+
+ pub enum BranchItem {
+	 Folder {
+		 display_name: String,
+		 children: Vec<BranchItem>,
+		 has_active_child: bool
+	 },
+	 Branch {
+		 ref_name: String,
+		 display_name: String,
+		 active: bool
+	 }
+ }
+
+impl BranchItem {
+	fn from_refs(unprocessed_parts_to_refs_map: Vec<(&str, &str)>, active_branch: &Option<&str>) -> Vec<BranchItem> {
+		let mut folders: HashMap<&str, (Vec<(&str, &str)>, bool)> = HashMap::new();
+		let mut branches = Vec::new();
+		for (parts, ref_name) in unprocessed_parts_to_refs_map {
+			let first_slash_pos = parts.find("/");
+			let active = active_branch.map(|active_branch_name| active_branch_name == ref_name).unwrap_or(false);
+			match first_slash_pos {
+				Some(pos) => {
+					let (folder_name, rest) = parts.split_at(pos);
+					let empty = match folders.get_mut(folder_name) {
+						None => {
+							true
+						}
+						Some(&mut (ref mut sub_items, ref mut has_active_child)) => {
+							sub_items.push((&rest[1..], ref_name));
+							if active {
+								*has_active_child = active;
+							}
+							false
+						}
+					};
+
+					if empty { // No non-lexical lifetimes yet!
+						let sub_items = vec![(&rest[1..], ref_name)];
+						folders.insert(folder_name, (sub_items, active));
+					}
+				},
+				None => {
+					let branch = BranchItem::Branch {
+						ref_name: ref_name.into(),
+						display_name: parts.into(),
+						active,
+					};
+					branches.push(branch);
+				}
+			}
+		}
+
+		let mut branch_items: Vec<BranchItem> = folders
+				.into_iter()
+				.map(|(folder_name, (sub_items, has_active_child))| {
+					let children = BranchItem::from_refs(sub_items, active_branch);
+					BranchItem::Folder {
+						display_name: folder_name.into(),
+						children,
+						has_active_child
+					}
+				})
+				.collect();
+		branch_items.extend(branches.into_iter());
+		branch_items
+	}
 }
