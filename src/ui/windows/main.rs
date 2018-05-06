@@ -19,33 +19,19 @@ use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, Create
 	LB_ADDSTRING, LBS_NOTIFY, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
 	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN, WS_CLIPCHILDREN,
-	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW};
+	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW, LPNMHDR};
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
+use winapi::um::commctrl::{self, WC_TREEVIEW, WC_LISTBOX, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
+	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
+	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE};
 
 use super::helpers::*;
 use begitter::model::main::{MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
+use begitter::model::main::BranchItem;
 use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
 use ui::windows::utils::{set_fonts, get_window_position};
 use ui::windows::dpi::GetDpiForWindow;
-use winapi::um::commctrl::WC_TREEVIEW;
-use winapi::um::commctrl::WC_LISTBOX;
-use winapi::um::commctrl::WC_STATIC;
-use winapi::um::commctrl::TVS_HASLINES;
-use winapi::um::commctrl::{TVM_INSERTITEMW, TVINSERTSTRUCTW};
-use winapi::shared::ntdef::NULL;
-use winapi::um::commctrl::TVI_SORT;
-use winapi::um::commctrl::TVIF_TEXT;
-use winapi::um::commctrl::TVM_DELETEITEM;
-use winapi::um::commctrl::TVI_ROOT;
-use begitter::model::main::BranchItem;
-use winapi::um::commctrl::TVIF_CHILDREN;
-use winapi::um::commctrl::HTREEITEM;
-use winapi::um::commctrl::TVIF_STATE;
-use winapi::um::commctrl::TVIS_BOLD;
-use winapi::um::commctrl::TVS_HASBUTTONS;
-use winapi::um::commctrl::TVS_LINESATROOT;
-use winapi::um::commctrl::TVIS_EXPANDED;
 
 const MAIN_CLASS: &str = "main";
 
@@ -350,7 +336,7 @@ impl MainView {
 
 	fn view_branches_recursively(&self, branches: &Vec<BranchItem>, parent: HTREEITEM) -> Result<(), WinApiError> {
 		for branch in branches {
-			fn insert_item(branches_tree_view: HWND, name: &mut Vec<u16>, has_children: bool, bold: bool, expanded: bool,
+			fn insert_item(branches_tree_view: HWND, name: &mut Vec<u16>, ref_name_ptr: *const String, has_children: bool, bold: bool, expanded: bool,
 						parent: HTREEITEM) -> Result<HTREEITEM, WinApiError> {
 				let mut item = TVINSERTSTRUCTW {
 					hInsertAfter: TVI_SORT,
@@ -360,12 +346,13 @@ impl MainView {
 
 				{
 					let item_info = unsafe { item.u.itemex_mut() };
-					item_info.mask = TVIF_TEXT | TVIF_CHILDREN | TVIF_STATE;
+					item_info.mask = TVIF_TEXT | TVIF_CHILDREN | TVIF_STATE | TVIF_PARAM;
 					item_info.pszText = name.as_mut_ptr();
 					item_info.cchTextMax = name.len() as i32;
 					item_info.cChildren = if has_children { 1 } else { 0 };
 					item_info.state = if bold { TVIS_BOLD } else { 0 } | if expanded { TVIS_EXPANDED } else { 0 };
 					item_info.stateMask = TVIS_BOLD | TVIS_EXPANDED;
+					item_info.lParam = ref_name_ptr as LPARAM;
 				}
 
 				let item_handle = try_send_message!(branches_tree_view, TVM_INSERTITEMW, 0, &item as *const _ as LPARAM; 0);
@@ -373,14 +360,14 @@ impl MainView {
 			}
 
 			match *branch {
-				BranchItem::Folder { display_name: ref display_name, children: ref children, has_active_child } => {
+				BranchItem::Folder { ref display_name, ref children, has_active_child } => {
 					let mut branch_name_str = to_wstring(display_name.as_str());
-					let handle = insert_item(self.branches_tree_view, &mut branch_name_str, true, false, has_active_child, parent)?;
+					let handle = insert_item(self.branches_tree_view, &mut branch_name_str, null_mut(),true, false, has_active_child, parent)?;
 					self.view_branches_recursively(children, handle)?;
 				}
-				BranchItem::Branch { display_name: ref display_name, active, .. } => {
+				BranchItem::Branch { ref display_name, active, ref ref_name } => {
 					let mut branch_name_str = to_wstring(display_name.as_str());
-					insert_item(self.branches_tree_view, &mut branch_name_str, false, active, false, parent)?;
+					insert_item(self.branches_tree_view, &mut branch_name_str, ref_name as *const _,  false, active, false, parent)?;
 				}
 			};
 		}
@@ -404,6 +391,19 @@ impl MainView {
 				self.reposition_views(width, height)?;
 				true
 			}
+			winuser::WM_NOTIFY => {
+				let header = unsafe { *(message_data.l_param as LPNMHDR) };
+				match header.code {
+					commctrl::NM_DBLCLK => {
+						if header.hwndFrom == self.branches_tree_view {
+							self.on_branch_double_click()?
+						} else {
+							false
+						}
+					}
+					_ => false
+				}
+			}
 			MESSAGE_MODEL_TO_MAIN_VIEW => {
 				self.receive_model_message_on_main_thread(message_data)?;
 				true
@@ -411,6 +411,22 @@ impl MainView {
 			_ => false
 		};
 		Ok(handled)
+	}
+
+	fn on_branch_double_click(&self) -> Result<bool, WinApiError> {
+		let selected_item_handle= try_send_message!(self.branches_tree_view, TVM_GETNEXTITEM, TVGN_CARET, 0; 0) as HTREEITEM;
+
+		let mut selected_item: TVITEMEXW = unsafe { mem::zeroed() };
+		selected_item.mask = TVIF_PARAM | TVIF_HANDLE;
+		selected_item.hItem = selected_item_handle;
+		try_send_message!(self.branches_tree_view, TVM_GETITEMW, 0, &mut selected_item as *mut _ as LPARAM; 0);
+
+		let string_ptr = selected_item.lParam as *const String;
+		if string_ptr.is_null() { return Ok(false); }
+
+		let ref_name= unsafe { (*string_ptr).as_str() };
+		self.model.as_ref().unwrap().switch_to_branch(ref_name);
+		Ok(true)
 	}
 
 	fn on_commit_right_click(&self, message_data: &MessageData) -> bool {
