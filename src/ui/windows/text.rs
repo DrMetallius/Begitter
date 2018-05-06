@@ -3,11 +3,18 @@ use ui::windows::helpers::WinApiError;
 use winapi::um::libloaderapi::LoadStringW;
 use std::ptr::null_mut;
 use std::slice::from_raw_parts;
+use std::ops::Range;
 
 pub const STRING_MAIN_WINDOW_NAME: UINT = 1;
 pub const STRING_MAIN_BRANCHES: UINT = 2;
 pub const STRING_MAIN_COMMITS: UINT = 3;
 pub const STRING_MAIN_PATCHES: UINT = 4;
+
+pub const STRING_MAIN_COMMITS_COLUMN_MESSAGE: UINT = 5;
+pub const STRING_MAIN_COMMITS_COLUMN_AUTHOR: UINT = 6;
+pub const STRING_MAIN_COMMITS_COLUMN_DATE: UINT = 7;
+pub const STRING_MAIN_COMMITS_COLUMN_HASH: UINT = 8;
+pub const STRING_MAIN_COMMITS_COLUMNS: Range<UINT> = STRING_MAIN_COMMITS_COLUMN_MESSAGE..STRING_MAIN_COMMITS_COLUMN_HASH + 1;
 
 pub fn load_string(id: UINT) -> Result<Vec<u16>, WinApiError> {
 	let mut string_pointer = null_mut::<u16>();
