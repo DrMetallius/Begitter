@@ -20,37 +20,20 @@ use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, Create
 	LB_ADDSTRING, LBS_NOTIFY, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
 	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN, WS_CLIPCHILDREN,
-	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW, LPNMHDR};
+	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW, LPNMHDR, SWP_NOREDRAW};
 use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 use winapi::um::commctrl::{self, WC_TREEVIEW, WC_LISTBOX, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
-	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, LVM_INSERTCOLUMNW, NMLVDISPINFOW, NMITEMACTIVATE};
+	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, LVM_INSERTCOLUMNW, NMLVDISPINFOW, NMITEMACTIVATE, WC_LISTVIEW, LVM_DELETEALLITEMS,
+	LVCF_TEXT, LVCF_SUBITEM, LVCOLUMNW, LVCF_WIDTH, LVIF_TEXT, LPSTR_TEXTCALLBACKW, LVM_INSERTITEMW, LVITEMW, LVN_GETDISPINFOW, LVS_REPORT, LVS_LIST,
+	LVIF_COLUMNS, LVCF_FMT, LVCFMT_LEFT, LVIF_STATE};
 
 use super::helpers::*;
-use begitter::model::main::{MainModel, MainViewReceiver};
+use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
-use begitter::model::main::BranchItem;
-use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS};
+use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS};
 use ui::windows::utils::{set_fonts, get_window_position};
 use ui::windows::dpi::GetDpiForWindow;
-use winapi::um::commctrl::WC_LISTVIEW;
-use winapi::um::commctrl::LVM_DELETEALLITEMS;
-use winapi::um::commctrl::LVCF_TEXT;
-use winapi::um::commctrl::LVCF_SUBITEM;
-use winapi::um::commctrl::LVCOLUMNW;
-use ui::windows::text::STRING_MAIN_COMMITS_COLUMNS;
-use winapi::um::commctrl::LVCF_WIDTH;
-use winapi::um::commctrl::LVIF_TEXT;
-use winapi::um::commctrl::LPSTR_TEXTCALLBACKW;
-use winapi::um::commctrl::LVM_INSERTITEMW;
-use winapi::um::commctrl::LVITEMW;
-use winapi::um::commctrl::LVN_GETDISPINFOW;
-use winapi::um::commctrl::LVS_REPORT;
-use winapi::um::commctrl::LVS_LIST;
-use winapi::um::commctrl::LVIF_COLUMNS;
-use winapi::um::commctrl::LVCF_FMT;
-use winapi::um::commctrl::LVCFMT_LEFT;
-use winapi::um::commctrl::LVIF_STATE;
 
 const MAIN_CLASS: &str = "main";
 
@@ -499,9 +482,8 @@ impl MainView {
 
 		let POINT { x, y } = {
 			let mut point = info.ptAction;
-			println!("{}, {}", point.x, point.y);
 			unsafe {
-				MapWindowPoints(self.commits_list_view, self.main_window, &mut point as *mut _, 1);
+				MapWindowPoints(self.commits_list_view, null_mut(), &mut point as *mut _, 1);
 			}
 			point
 		};
