@@ -107,7 +107,9 @@ macro_rules! try_send_message {
 	};
 }
 
-pub fn to_wstring(string: &str) -> Vec<u16> {
+pub type WideString = Vec<u16>;
+
+pub fn to_wstring(string: &str) -> WideString {
 	let mut data: Vec<u16> = OsStr::new(string).encode_wide().collect();
 	data.push(0);
 	data

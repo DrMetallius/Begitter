@@ -408,7 +408,7 @@ index afe0cb3..9944a9f 100644
 
 	#[test]
 	fn test_apply() {
-		let (git, dir) = create_git();
+		let (git, _temp_dir) = create_git();
 		git.read_tree(Some("refs/tags/reading-tests")).unwrap();
 		git.apply(PATCH, false).unwrap();
 

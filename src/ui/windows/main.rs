@@ -3,11 +3,10 @@ use std::sync::Arc;
 use std::mem;
 
 use failure;
-use time;
 use winapi::Interface;
 use winapi::ctypes::c_int;
 use winapi::shared::guiddef::GUID;
-use winapi::shared::minwindef::{DWORD, HINSTANCE, HIWORD, LOWORD, MAKELONG, LPARAM, LRESULT, UINT, WORD, WPARAM, TRUE};
+use winapi::shared::minwindef::{DWORD, HINSTANCE, LOWORD, LPARAM, LRESULT, UINT, WORD, WPARAM, TRUE};
 use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT, RECT};
 use winapi::shared::winerror::S_OK;
 use winapi::shared::wtypesbase::CLSCTX_INPROC_SERVER;
@@ -16,24 +15,25 @@ use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
 use winapi::um::winnt::WCHAR;
 use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-	IDC_ARROW, LB_RESETCONTENT, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE,
-	LB_ADDSTRING, LBS_NOTIFY, LB_ERR, LB_ERRSPACE, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
+	IDC_ARROW, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE,
+	LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
 	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN, WS_CLIPCHILDREN,
-	TrackPopupMenuEx, GetSubMenu, LB_SETCURSEL, TPM_RETURNCMD, LB_ITEMFROMPOINT, MapWindowPoints, SetWindowTextW, LPNMHDR, SWP_NOREDRAW};
-use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
-use winapi::um::commctrl::{self, WC_TREEVIEW, WC_LISTBOX, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
+	TrackPopupMenuEx, GetSubMenu, TPM_RETURNCMD, MapWindowPoints, SetWindowTextW, LPNMHDR};
+use winapi::um::commctrl::{self, WC_TREEVIEW, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
-	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, LVM_INSERTCOLUMNW, NMLVDISPINFOW, NMITEMACTIVATE, WC_LISTVIEW, LVM_DELETEALLITEMS,
-	LVCF_TEXT, LVCF_SUBITEM, LVCOLUMNW, LVCF_WIDTH, LVIF_TEXT, LPSTR_TEXTCALLBACKW, LVM_INSERTITEMW, LVITEMW, LVN_GETDISPINFOW, LVS_REPORT, LVS_LIST,
-	LVIF_COLUMNS, LVCF_FMT, LVCFMT_LEFT, LVIF_STATE};
+	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, NMLVDISPINFOW, NMITEMACTIVATE, WC_LISTVIEW, LVM_DELETEALLITEMS,
+	LVS_REPORT};
 
 use super::helpers::*;
 use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
-use ui::windows::text::{load_string, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES, STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS};
-use ui::windows::utils::{set_fonts, get_window_position};
+use ui::windows::text::{load_string, STRING_MAIN_PATCHES_COLUMNS, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES,
+	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS};
+use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view};
 use ui::windows::dpi::GetDpiForWindow;
+use ui::windows::text::format_time;
+use std::borrow::Cow;
 
 const MAIN_CLASS: &str = "main";
 
@@ -233,13 +233,14 @@ struct MainView {
 	commits_label: HWND,
 	branches_tree_view: HWND,
 	commits_list_view: HWND,
-	combined_patches_list_box: HWND,
+	combined_patches_list_view: HWND,
 
 	branches: Vec<BranchItem>,
 	active_branch: Option<String>,
 	commits: Vec<Commit>,
-	commit_strings: Vec<Vec<Vec<u16>>>,
+	commit_strings: Vec<Vec<WideString>>,
 	combined_patches: Vec<ChangeSetInfo>,
+	combined_patch_strings: Vec<Vec<WideString>>,
 }
 
 impl MainView {
@@ -253,7 +254,6 @@ impl MainView {
 	fn initialize(main_window: HWND) -> Result<MainView, WinApiError> {
 		let static_class = to_wstring(WC_STATIC);
 		let tree_view_class = to_wstring(WC_TREEVIEW);
-		let list_box_class = to_wstring(WC_LISTBOX);
 		let list_view_class = to_wstring(WC_LISTVIEW);
 
 		let branches_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD,
@@ -273,24 +273,14 @@ impl MainView {
 				WS_VISIBLE | WS_CHILD | WS_VSCROLL, MainView::EDGE_MARGIN, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
-		let combined_patches_list_box = try_get!(CreateWindowExW(0, list_box_class.as_ptr(), null_mut(), WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | LBS_NOTIFY | WS_VSCROLL,
-				MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		let combined_patches_list_view = try_get!(CreateWindowExW(0, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER |
+				WS_VISIBLE | WS_CHILD | WS_VSCROLL, MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0,
+				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		insert_columns_into_list_view(combined_patches_list_view, STRING_MAIN_PATCHES_COLUMNS)?;
 
-		let commits_list_view = try_get!(CreateWindowExW(0, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | WS_VSCROLL,
-				0, 0, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
-
-		let mut column: LVCOLUMNW = unsafe { mem::zeroed() };
-		column.mask = LVCF_TEXT | LVCF_SUBITEM | LVCF_WIDTH | LVCF_FMT;
-
-		for (index, text_id) in STRING_MAIN_COMMITS_COLUMNS.enumerate() {
-
-			let mut name = load_string(text_id)?;
-			column.fmt = LVCFMT_LEFT;
-			column.iSubItem = index as c_int;
-			column.pszText = name.as_mut_ptr();
-			column.cx = 200;
-			try_send_message!(commits_list_view, LVM_INSERTCOLUMNW, index, &mut column as *mut _ as LPARAM; -1);
-		}
+		let commits_list_view = try_get!(CreateWindowExW(0, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER | WS_VISIBLE |
+				WS_CHILD | WS_VSCROLL, 0, 0, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		insert_columns_into_list_view(commits_list_view, STRING_MAIN_COMMITS_COLUMNS)?;
 
 		set_fonts(main_window)?;
 
@@ -299,13 +289,14 @@ impl MainView {
 			main_window,
 			commits_label,
 			branches_tree_view,
-			combined_patches_list_box,
+			combined_patches_list_view,
 			commits_list_view,
 			branches: Vec::new(),
 			active_branch: None,
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
 			commit_strings: Vec::new(),
+			combined_patch_strings: Vec::new()
 		};
 
 		let rect = get_window_position(main_window, main_window)?;
@@ -333,48 +324,48 @@ impl MainView {
 			}
 			MainViewMessage::Commits(commits) => {
 				self.commits = commits;
-				self.commit_strings.clear();
-
-				try_send_message!(self.commits_list_view, LVM_DELETEALLITEMS, 0, 0);
-
-				let mut item: LVITEMW = unsafe { mem::zeroed() };
-				item.mask = LVIF_TEXT | LVIF_STATE;
-				item.pszText = LPSTR_TEXTCALLBACKW;
-				item.iSubItem = 0;
-				item.state = 0;
-				item.stateMask = 0;
-
-				for (commit_index, commit) in self.commits.iter().enumerate() {
-					let commit_time = time::strftime("%Y-%m-%d %H:%M:%S", &time::at(commit.info.change_set_info.author_action.time.clone())).unwrap();
-					let strings = vec![&commit.info.change_set_info.message,
-						&commit.info.change_set_info.author_action.name,
-						&commit_time,
-						&commit.hash]
-							.into_iter()
-							.map(|string| to_wstring(&string))
-							.collect();
-					self.commit_strings.push(strings);
-
-					item.iItem = commit_index as c_int;
-					try_send_message!(self.commits_list_view, LVM_INSERTITEMW, 0, &item as *const _ as LPARAM; -1);
-				}
+				MainView::update_list_view(self.commits_list_view, &self.commits, &mut self.commit_strings,
+						|commit| {
+							let change_set_info = &commit.info.change_set_info;
+							vec![change_set_info.message.as_str().into(),
+								change_set_info.author_action.name.as_str().into(),
+								format_time(change_set_info.author_action.time).into(),
+								commit.hash.as_str().into()]
+						})?;
 			}
 			MainViewMessage::CombinedPatches(combined_patches) => {
 				self.combined_patches = combined_patches;
-
-				try_send_message!(self.combined_patches_list_box, LB_RESETCONTENT, 0, 0);
-				for info in &self.combined_patches {
-					try_send_message!(self.combined_patches_list_box, LB_ADDSTRING, 0, to_wstring(&info.message).as_ptr() as LPARAM; LB_ERR, LB_ERRSPACE);
-				}
+				MainView::update_list_view(self.combined_patches_list_view, &self.combined_patches, &mut self.combined_patch_strings,
+						|patch| {
+							vec![patch.message.as_str().into(),
+								patch.author_action.name.as_str().into(),
+								format_time(patch.author_action.time).into()]
+						})?;
 			}
 		}
 
 		Ok(())
 	}
 
+	fn update_list_view<I>(list_view: HWND, item_slice: &[I], item_strings: &mut Vec<Vec<WideString>>,
+			string_generator: fn(&I) -> Vec<Cow<str>>) -> Result<(), WinApiError> {
+		try_send_message!(list_view, LVM_DELETEALLITEMS, 0, 0);
+
+		item_strings.clear();
+		for item in item_slice {
+			let strings = string_generator(item)
+					.into_iter()
+					.map(|string| to_wstring(&*string))
+					.collect();
+			item_strings.push(strings);
+		}
+
+		insert_rows_into_list_view(list_view, item_slice.len())
+	}
+
 	fn view_branches_recursively(&self, branches: &Vec<BranchItem>, parent: HTREEITEM) -> Result<(), WinApiError> {
 		for branch in branches {
-			fn insert_item(branches_tree_view: HWND, name: &mut Vec<u16>, ref_name_ptr: *const String, has_children: bool, bold: bool, expanded: bool,
+			fn insert_item(branches_tree_view: HWND, name: &mut WideString, ref_name_ptr: *const String, has_children: bool, bold: bool, expanded: bool,
 						parent: HTREEITEM) -> Result<HTREEITEM, WinApiError> {
 				let mut item = TVINSERTSTRUCTW {
 					hInsertAfter: TVI_SORT,
@@ -441,9 +432,16 @@ impl MainView {
 						}
 					}
 					commctrl::LVN_GETDISPINFOW => {
+						fn fill_info(l_param: LPARAM, strings: &mut Vec<Vec<WideString>>) {
+							let info = unsafe { (l_param as *mut NMLVDISPINFOW).as_mut().unwrap() };
+							info.item.pszText = strings[info.item.iItem as usize][info.item.iSubItem as usize].as_mut_ptr();
+						}
+
 						if header.hwndFrom == self.commits_list_view {
-							let mut info = unsafe { (message_data.l_param as *mut NMLVDISPINFOW).as_mut().unwrap() };
-							info.item.pszText = self.commit_strings[info.item.iItem as usize][info.item.iSubItem as usize].as_mut_ptr();
+							fill_info(message_data.l_param, &mut self.commit_strings);
+							true
+						} else if header.hwndFrom == self.combined_patches_list_view {
+							fill_info(message_data.l_param, &mut self.combined_patch_strings);
 							true
 						} else {
 							false
@@ -535,12 +533,13 @@ impl MainView {
 		let vert_diff = rect.bottom - rect.top;
 		let client_area_height = height - vert_diff;
 
-		try_call!(SetWindowPos(self.branches_tree_view, null_mut(), 0, 0, MainView::BRANCHES_WIDTH, client_area_height - 2 * MainView::EDGE_MARGIN - MainView::LABEL_HEIGHT, SWP_NOMOVE), 0);
+		try_call!(SetWindowPos(self.branches_tree_view, null_mut(), 0, 0, MainView::BRANCHES_WIDTH, client_area_height - 2 * MainView::EDGE_MARGIN -
+				MainView::LABEL_HEIGHT, SWP_NOMOVE), 0);
 
 		let patches_height = (client_area_height - 2 * (MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT)) / 2;
 		let commits_and_patches_hor_pos = client_area_width - MainView::COMMIT_AND_PATCH_HOR_POSITION - MainView::EDGE_MARGIN;
 		let commits_vert_pos = MainView::EDGE_MARGIN + 2 * MainView::LABEL_HEIGHT + patches_height;
-		try_call!(SetWindowPos(self.combined_patches_list_box, null_mut(), 0, 0, commits_and_patches_hor_pos, patches_height, SWP_NOMOVE), 0);
+		try_call!(SetWindowPos(self.combined_patches_list_view, null_mut(), 0, 0, commits_and_patches_hor_pos, patches_height, SWP_NOMOVE), 0);
 		try_call!(SetWindowPos(self.commits_list_view, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos, commits_and_patches_hor_pos,
 				client_area_height - commits_vert_pos - MainView::EDGE_MARGIN, 0), 0);
 		try_call!(SetWindowPos(self.commits_label, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos - MainView::LABEL_HEIGHT,
