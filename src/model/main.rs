@@ -10,10 +10,12 @@ use git::{self, Git};
 use change_set::{Commit, CombinedPatch, ChangeSetInfo};
 use patch_editor::parser::parse_combined_patch;
 use std::collections::HashMap;
+use model::main::Command::SetPatchMessage;
 
 enum Command {
 	GetBranches,
 	ImportCommits(Vec<Commit>),
+	SetPatchMessage(usize, String),
 	ApplyCommits(Commit),
 	SwitchToBranch(String)
 }
@@ -69,6 +71,10 @@ impl MainModel {
 				}
 
 				combined_patches.extend(new_combined_patches);
+				view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())?;
+			}
+			SetPatchMessage(patch_index, message) => {
+				combined_patches[patch_index].info.message = message;
 				view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())?;
 			}
 			Command::ApplyCommits(first_commit_to_replace) => {
@@ -158,6 +164,10 @@ impl MainModel {
 
 	pub fn import_commits(&self, commits: Vec<Commit>) {
 		self.worker_sink.send(Command::ImportCommits(commits)).unwrap();
+	}
+
+	pub fn set_patch_message(&self, patch_index: usize, message: String) {
+		self.worker_sink.send(Command::SetPatchMessage(patch_index, message));
 	}
 
 	pub fn apply_patches(&self, first_commit_to_replace: Commit) {

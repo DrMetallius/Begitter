@@ -15,11 +15,9 @@ use winapi::um::shobjidl::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, IFileDialog};
 use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
 use winapi::um::winnt::WCHAR;
 use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-	IDC_ARROW, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE,
-	LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
+	IDC_ARROW, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE, DialogBoxParamW, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
-	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, TPM_TOPALIGN, TPM_LEFTALIGN, WS_CLIPCHILDREN,
-	TrackPopupMenuEx, GetSubMenu, TPM_RETURNCMD, MapWindowPoints, SetWindowTextW, LPNMHDR};
+	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, WS_CLIPCHILDREN, SetWindowTextW, LPNMHDR};
 use winapi::um::commctrl::{self, WC_TREEVIEW, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
 	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, NMLVDISPINFOW, NMITEMACTIVATE, WC_LISTVIEW, LVM_DELETEALLITEMS,
@@ -34,16 +32,31 @@ use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_lis
 use ui::windows::dpi::GetDpiForWindow;
 use ui::windows::text::format_time;
 use std::borrow::Cow;
+use ui::windows::utils::show_context_menu;
+use winapi::shared::basetsd::INT_PTR;
+use winapi::shared::minwindef::FALSE;
+use winapi::um::winuser::EndDialog;
+use ui::windows::utils::close_dialog;
+use ui::windows::utils::get_dialog_field_text;
+use winapi::um::commctrl::LVM_GETNEXTITEM;
+use winapi::um::commctrl::LVNI_SELECTED;
+use ui::windows::utils::set_dialog_field_text;
 
 const MAIN_CLASS: &str = "main";
 
 const MAIN_MENU: &str = "main_menu";
-const MANI_MENU_COMMIT: &str = "main_commit_menu";
+const MAIN_MENU_COMMIT: &str = "main_commit_menu";
+const MAIN_MENU_COMBINED_PATCH: &str = "main_combined_patch_menu";
 const MAIN_ACCELERATORS: &str = "main_accelerators";
 
 const ID_MENU_OPEN: WORD = 100;
 const ID_MENU_IMPORT: WORD = 200;
 const ID_MENU_APPLY: WORD = 201;
+const ID_MENU_EDIT_MESSAGE: WORD = 300;
+
+const ID_DIALOG_EDIT_MESSAGE_FIELD: WORD = 1;
+const ID_DIALOG_EDIT_MESSAGE_BUTTON_OK: WORD = 2;
+const ID_DIALOG_EDIT_MESSAGE_BUTTON_CANCEL: WORD = 3;
 
 const MESSAGE_MODEL_TO_MAIN_VIEW: UINT = WM_APP;
 
@@ -123,7 +136,7 @@ pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, 
 			Some(0)
 		}
 		winuser::WM_COMMAND => {
-			match LOWORD(w_param as u32) {
+			match LOWORD(w_param as DWORD) {
 				ID_MENU_OPEN => {
 					if let Ok(dir) = show_open_file_dialog(h_wnd) {
 						unsafe {
@@ -161,6 +174,38 @@ pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, 
 	unsafe {
 		DefWindowProcW(h_wnd, message, w_param, l_param)
 	}
+}
+
+pub extern "system" fn edit_message_dialog_proc(hwnd_dlg: HWND, u_msg : UINT, w_param: WPARAM, l_param: LPARAM) -> INT_PTR {
+	let handled = match u_msg {
+		winuser::WM_INITDIALOG => {
+			let original_text = *unsafe { Box::from_raw(l_param as *mut _) };
+			set_dialog_field_text(hwnd_dlg, ID_DIALOG_EDIT_MESSAGE_FIELD as c_int, original_text).unwrap();
+			true
+		}
+		winuser::WM_CLOSE => {
+			close_dialog(hwnd_dlg, 0).unwrap();
+			true
+		}
+		winuser::WM_COMMAND => {
+			match LOWORD(w_param as DWORD) {
+				ID_DIALOG_EDIT_MESSAGE_BUTTON_OK => {
+					let text = get_dialog_field_text(hwnd_dlg, ID_DIALOG_EDIT_MESSAGE_FIELD as c_int).unwrap();
+					let text_box = Box::into_raw(Box::new(text));
+					close_dialog(hwnd_dlg, text_box as INT_PTR).unwrap();
+					true
+				}
+				ID_DIALOG_EDIT_MESSAGE_BUTTON_CANCEL => {
+					close_dialog(hwnd_dlg, 0).unwrap();
+					true
+				}
+				_ => false
+			}
+		}
+		_ => false
+	};
+
+	(if handled { TRUE } else { FALSE }) as INT_PTR
 }
 
 struct MessageData {
@@ -427,6 +472,9 @@ impl MainView {
 						if header.hwndFrom == self.commits_list_view {
 							let info = unsafe { (message_data.l_param as *const NMITEMACTIVATE).as_ref().unwrap() };
 							self.on_commit_right_click(&info)
+						} else if header.hwndFrom == self.combined_patches_list_view {
+							let info = unsafe { (message_data.l_param as *const NMITEMACTIVATE).as_ref().unwrap() };
+							self.on_combined_patch_click(&info)?
 						} else {
 							false
 						}
@@ -478,25 +526,7 @@ impl MainView {
 	fn on_commit_right_click(&self, info: &NMITEMACTIVATE) -> bool {
 		if info.iItem < 0 { return false; }
 
-		let POINT { x, y } = {
-			let mut point = info.ptAction;
-			unsafe {
-				MapWindowPoints(self.commits_list_view, null_mut(), &mut point as *mut _, 1);
-			}
-			point
-		};
-
-		let context_menu = MenuHandle::load(MANI_MENU_COMMIT).unwrap();
-		let result = unsafe {
-			let position = 0;
-			let popup = GetSubMenu(context_menu.handle(), position);
-			if popup.is_null() {
-				panic!("{} is an invalid menu position", position);
-			}
-			TrackPopupMenuEx(popup, TPM_RETURNCMD | TPM_TOPALIGN | TPM_LEFTALIGN,
-					x, y, self.main_window, null_mut()) as WORD
-		};
-
+		let result = show_context_menu(self.main_window, self.commits_list_view, &info.ptAction, MAIN_MENU_COMMIT);
 		match result {
 			self::ID_MENU_IMPORT => {
 				let commits: Vec<Commit> = self.commits[0..info.iItem as usize + 1]
@@ -513,6 +543,35 @@ impl MainView {
 			}
 			_ => false
 		}
+	}
+
+	fn on_combined_patch_click(&self, info: &NMITEMACTIVATE) -> Result<bool, WinApiError> {
+		if info.iItem < 0 { return Ok(false); }
+
+		let selected_item = try_send_message!(self.combined_patches_list_view, LVM_GETNEXTITEM, -1isize as usize, LVNI_SELECTED);
+		if selected_item < 0 {
+			panic!("Nothing is selected in the combined patch list view");
+		}
+
+		let result = show_context_menu(self.main_window, self.combined_patches_list_view, &info.ptAction, MAIN_MENU_COMBINED_PATCH);
+		match result {
+			self::ID_MENU_EDIT_MESSAGE => {
+				let original_text = Box::into_raw(Box::new(self.combined_patches[selected_item as usize].message.clone()));
+				let text_box_ptr = unsafe { DialogBoxParamW(null_mut(), to_wstring("main_commit_message_dialog").as_ptr(),
+					self.main_window, Some(edit_message_dialog_proc), original_text as LPARAM) };
+				let mut text = match text_box_ptr {
+					0 => return Ok(false),
+					checked_text_box_ptr => {
+						*unsafe { Box::from_raw(text_box_ptr as *mut WideString) }
+					}
+				};
+
+				self.model.as_ref().unwrap().set_patch_message(selected_item as usize, from_wstring(text.as_mut_ptr()));
+			},
+			_ => return Ok(false)
+		}
+
+		Ok(true)
 	}
 
 	fn reposition_views(&self, width: c_int, height: c_int) -> Result<(), WinApiError> {

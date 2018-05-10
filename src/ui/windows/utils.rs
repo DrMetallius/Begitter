@@ -2,11 +2,13 @@ use std::mem;
 use std::ptr::null_mut;
 use std::ops::Range;
 
-use winapi::shared::minwindef::{DWORD, UINT, LPARAM, BOOL, TRUE, WPARAM};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::basetsd::INT_PTR;
+use winapi::shared::minwindef::{DWORD, UINT, LPARAM, BOOL, TRUE, WPARAM, WORD};
+use winapi::shared::windef::{HWND, RECT, POINT};
 use winapi::um::commctrl::{LVITEMW, LVCOLUMNW, LVM_INSERTITEMW, LVM_INSERTCOLUMNW, LVCF_TEXT, LVCF_SUBITEM, LVCF_WIDTH, LVCF_FMT, LVCFMT_LEFT,
 	LVIF_TEXT, LVIF_STATE, LPSTR_TEXTCALLBACKW};
-use winapi::um::winuser::{WM_SETFONT, SPI_GETNONCLIENTMETRICS, GetWindowRect, SendMessageW, EnumChildWindows, MapWindowPoints};
+use winapi::um::winuser::{WM_SETFONT, SPI_GETNONCLIENTMETRICS, GetWindowRect, SendMessageW, EnumChildWindows, MapWindowPoints, GetSubMenu,
+	TPM_RETURNCMD, TPM_TOPALIGN, TPM_LEFTALIGN, TrackPopupMenuEx};
 use winapi::um::wingdi::CreateFontIndirectW;
 use winapi::um::errhandlingapi::{SetLastError, GetLastError};
 use winapi::ctypes::c_int;
@@ -15,6 +17,14 @@ use failure::Backtrace;
 use ui::windows::dpi::{GetDpiForWindow, NONCLIENTMETRICS, SystemParametersInfoForDpi};
 use ui::windows::helpers::WinApiError;
 use ui::windows::text::load_string;
+use ui::windows::helpers::MenuHandle;
+use winapi::um::winuser::GetWindowTextLengthW;
+use winapi::um::winuser::GetDlgItemTextW;
+use winapi::um::winuser::EndDialog;
+use winapi::um::winuser::GetDlgItem;
+use winapi::um::winuser::SetWindowTextW;
+use ui::windows::helpers::WideString;
+use ui::windows::helpers::to_wstring;
 
 pub fn set_fonts(main_window: HWND) -> Result<(), WinApiError> {
 	let dpi = try_call!(GetDpiForWindow(main_window), 0);
@@ -93,5 +103,54 @@ pub fn insert_rows_into_list_view(list_view: HWND, column_count: usize) -> Resul
 		try_send_message!(list_view, LVM_INSERTITEMW, 0, &item as *const _ as LPARAM; -1);
 	}
 
+	Ok(())
+}
+
+pub fn show_context_menu(window_proc_owner: HWND, source_window: HWND, point: &POINT, menu_resource: &str) -> WORD {
+	let POINT { x, y } = {
+		let mut point = *point;
+		unsafe {
+			MapWindowPoints(source_window, null_mut(), &mut point as *mut _, 1);
+		}
+		point
+	};
+
+	let context_menu = MenuHandle::load(menu_resource).unwrap();
+	unsafe {
+		let position = 0;
+		let popup = GetSubMenu(context_menu.handle(), position);
+		if popup.is_null() {
+			panic!("{} is an invalid menu position", position);
+		}
+		TrackPopupMenuEx(popup, TPM_RETURNCMD | TPM_TOPALIGN | TPM_LEFTALIGN,
+			x, y, window_proc_owner, null_mut()) as WORD
+	}
+}
+
+pub fn set_dialog_field_text(hwnd_dlg: HWND, field_id: c_int, text: String) -> Result<(), WinApiError> {
+	let hwnd_field = try_get!(GetDlgItem(hwnd_dlg, field_id));
+	let mut wide_text = to_wstring(&text);
+	try_call!(SetWindowTextW(hwnd_field, wide_text.as_mut_ptr()), 0);
+
+	Ok(())
+}
+
+pub fn get_dialog_field_text(hwnd_dlg: HWND, field_id: c_int) -> Result<WideString, WinApiError> {
+	let hwnd_field = try_get!(GetDlgItem(hwnd_dlg, field_id));
+	let buf_length = try_call!(GetWindowTextLengthW(hwnd_field), 0) as usize;
+
+	let mut text = Vec::new();
+	text.reserve_exact(buf_length + 1);
+
+	let length = try_call!(GetDlgItemTextW(hwnd_dlg, field_id, text.as_mut_ptr(), text.capacity() as c_int), 0) as usize;
+	unsafe {
+		text.set_len(length + 1);
+	}
+
+	Ok(text)
+}
+
+pub fn close_dialog(hwnd_dlg: HWND, return_code: INT_PTR) -> Result<(), WinApiError> {
+	try_call!(EndDialog(hwnd_dlg, return_code), 0);
 	Ok(())
 }
