@@ -1,3 +1,26 @@
+/* System definitions first because importing extra headers is tricky with Cargo and embed-resource */
+
+#define FALSE               0
+
+#define WS_CAPTION          0x00C00000L
+#define WS_SYSMENU          0x00080000L
+#define WS_BORDER           0x00800000L
+#define WS_TABSTOP          0x00010000L
+#define WS_VSCROLL          0x00200000L
+#define WS_HSCROLL          0x00100000L
+
+#define DS_MODALFRAME       0x80L
+#define DS_SETFONT          0x40L
+#define DS_FIXEDSYS         0x0008L
+#define DS_SHELLFONT        (DS_SETFONT | DS_FIXEDSYS)
+
+#define ES_LEFT             0x0000L
+#define ES_MULTILINE        0x0004L
+#define ES_AUTOVSCROLL      0x0040L
+#define ES_WANTRETURN       0x1000L
+
+#define FW_NORMAL           400
+
 #define RT_MANIFEST 24
 
 #define STRING_MAIN_WINDOW_NAME 1
@@ -16,6 +39,11 @@
 #define ID_MENU_OPEN 100
 #define ID_MENU_IMPORT 200
 #define ID_MENU_APPLY 201
+#define ID_MENU_EDIT_MESSAGE 300
+
+#define ID_DIALOG_EDIT_MESSAGE_FIELD 1
+#define ID_DIALOG_EDIT_MESSAGE_BUTTON_OK 2
+#define ID_DIALOG_EDIT_MESSAGE_BUTTON_CANCEL 3
 
 1 RT_MANIFEST "manifest.xml"
 
@@ -36,9 +64,27 @@ main_commit_menu MENU
     }
 }
 
+main_combined_patch_menu MENU
+{
+    POPUP "Patch"
+    {
+        MENUITEM "Edit message", ID_MENU_EDIT_MESSAGE
+    }
+}
+
 main_accelerators ACCELERATORS
 {
     "o", ID_MENU_OPEN, CONTROL, VIRTKEY
+}
+
+main_commit_message_dialog DIALOGEX 0, 0, 400, 270
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_CAPTION | WS_SYSMENU | WS_BORDER
+FONT 9, "MS Shell Dlg", FW_NORMAL, FALSE
+CAPTION "Edit message"
+{
+     EDITTEXT 1, 4, 4, 392, 240, ES_MULTILINE | ES_LEFT | ES_AUTOVSCROLL | ES_WANTRETURN | WS_BORDER | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL
+     PUSHBUTTON "&OK", 2, 272, 250, 60, 16
+     PUSHBUTTON "&Cancel", 3, 336, 250, 60, 16
 }
 
 STRINGTABLE
