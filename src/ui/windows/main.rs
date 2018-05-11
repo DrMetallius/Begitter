@@ -53,6 +53,7 @@ const ID_MENU_OPEN: WORD = 100;
 const ID_MENU_IMPORT: WORD = 200;
 const ID_MENU_APPLY: WORD = 201;
 const ID_MENU_EDIT_MESSAGE: WORD = 300;
+const ID_MENU_DELETE: WORD = 301;
 
 const ID_DIALOG_EDIT_MESSAGE_FIELD: WORD = 1;
 const ID_DIALOG_EDIT_MESSAGE_BUTTON_OK: WORD = 2;
@@ -567,6 +568,9 @@ impl MainView {
 				};
 
 				self.model.as_ref().unwrap().set_patch_message(selected_item as usize, from_wstring(text.as_mut_ptr()));
+			},
+			self::ID_MENU_DELETE => {
+				self.model.as_ref().unwrap().delete(selected_item as usize);
 			},
 			_ => return Ok(false)
 		}

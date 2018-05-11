@@ -40,6 +40,7 @@
 #define ID_MENU_IMPORT 200
 #define ID_MENU_APPLY 201
 #define ID_MENU_EDIT_MESSAGE 300
+#define ID_MENU_DELETE 301
 
 #define ID_DIALOG_EDIT_MESSAGE_FIELD 1
 #define ID_DIALOG_EDIT_MESSAGE_BUTTON_OK 2
@@ -69,6 +70,7 @@ main_combined_patch_menu MENU
     POPUP "Patch"
     {
         MENUITEM "Edit message", ID_MENU_EDIT_MESSAGE
+        MENUITEM "Delete", ID_MENU_DELETE
     }
 }
 
