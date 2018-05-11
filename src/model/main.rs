@@ -16,6 +16,7 @@ enum Command {
 	GetBranches,
 	ImportCommits(Vec<Commit>),
 	SetPatchMessage(usize, String),
+	DeletePatch(usize),
 	ApplyCommits(Commit),
 	SwitchToBranch(String)
 }
@@ -54,6 +55,10 @@ impl MainModel {
 	}
 
 	fn perform_command(view: &MainViewReceiver, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>, command: Command) -> Result<(), failure::Error> {
+		fn show_combined_patches(view: &MainViewReceiver, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
+			view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
+		}
+
 		match command {
 			Command::GetBranches => {
 				MainModel::get_branches_and_commits(view, git, combined_patches)?;
@@ -71,11 +76,15 @@ impl MainModel {
 				}
 
 				combined_patches.extend(new_combined_patches);
-				view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())?;
+				show_combined_patches(view, combined_patches)?;
 			}
-			SetPatchMessage(patch_index, message) => {
+			Command::SetPatchMessage(patch_index, message) => {
 				combined_patches[patch_index].info.message = message;
-				view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())?;
+				show_combined_patches(view, combined_patches)?;
+			}
+			Command::DeletePatch(patch_index) => {
+				combined_patches.remove(patch_index);
+				show_combined_patches(view, combined_patches)?;
 			}
 			Command::ApplyCommits(first_commit_to_replace) => {
 				let active_branch = git.symbolic_ref("HEAD")?;
@@ -168,6 +177,10 @@ impl MainModel {
 
 	pub fn set_patch_message(&self, patch_index: usize, message: String) {
 		self.worker_sink.send(Command::SetPatchMessage(patch_index, message));
+	}
+
+	pub fn delete(&self, patch_index: usize) {
+		self.worker_sink.send(Command::DeletePatch(patch_index));
 	}
 
 	pub fn apply_patches(&self, first_commit_to_replace: Commit) {
