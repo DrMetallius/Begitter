@@ -79,9 +79,12 @@ macro_rules! try_get {
 macro_rules! try_call {
 	($($call:ident).+($($args:expr),*), $error_value:expr) => {
 		unsafe {
+			::winapi::um::errhandlingapi::SetLastError(0 as ::winapi::shared::minwindef::DWORD);
 			let result = $($call).*($($args),*);
-			if result == $error_value {
-				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(::winapi::um::errhandlingapi::GetLastError() as u64, ::failure::Backtrace::new()));
+
+			let error = ::winapi::um::errhandlingapi::GetLastError();
+			if result == $error_value && error != 0 {
+				return ::std::result::Result::Err(::ui::windows::helpers::WinApiError(error as u64, ::failure::Backtrace::new()));
 			}
 			result
 		}

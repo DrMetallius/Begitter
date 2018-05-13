@@ -16,11 +16,13 @@ enum Command {
 	GetBranches,
 	ImportCommits(Vec<Commit>),
 	SetPatchMessage(usize, String),
+	MovePatch(usize, usize),
 	DeletePatch(usize),
 	ApplyCommits(Commit),
 	SwitchToBranch(String)
 }
 
+#[derive(Clone)]
 pub struct MainModel {
 	worker_sink: sync::mpsc::Sender<Command>
 }
@@ -81,6 +83,18 @@ impl MainModel {
 			Command::SetPatchMessage(patch_index, message) => {
 				combined_patches[patch_index].info.message = message;
 				show_combined_patches(view, combined_patches)?;
+			}
+			Command::MovePatch(source_position, insertion_position) => {
+				if source_position != insertion_position {
+					let mut adjusted_insertion_position = insertion_position;
+					if source_position < insertion_position {
+						adjusted_insertion_position -= 1;
+					}
+
+					let patch = combined_patches.remove(source_position);
+					combined_patches.insert(adjusted_insertion_position, patch);
+					show_combined_patches(view, combined_patches)?;
+				}
 			}
 			Command::DeletePatch(patch_index) => {
 				combined_patches.remove(patch_index);
@@ -177,6 +191,10 @@ impl MainModel {
 
 	pub fn set_patch_message(&self, patch_index: usize, message: String) {
 		self.worker_sink.send(Command::SetPatchMessage(patch_index, message));
+	}
+
+	pub fn move_patch(&self, source_position: usize, insertion_position: usize) {
+		self.worker_sink.send(Command::MovePatch(source_position, insertion_position)).unwrap();
 	}
 
 	pub fn delete(&self, patch_index: usize) {
