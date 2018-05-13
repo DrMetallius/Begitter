@@ -59,16 +59,7 @@ pub fn get_window_position(window: HWND, reference_window: HWND) -> Result<RECT,
 	try_call!(GetWindowRect(window, &mut rect as *mut _ as *mut _), 0);
 
 	if window != reference_window {
-		unsafe {
-			SetLastError(0 as DWORD);
-			let result = MapWindowPoints(null_mut(), reference_window,&mut rect as *mut _ as *mut _, 2);
-			if result == 0 {
-				let error = GetLastError();
-				if error != 0 {
-					return Err(WinApiError(error as u64, Backtrace::new()));
-				}
-			}
-		}
+		try_call!(MapWindowPoints(null_mut(), reference_window,&mut rect as *mut _ as *mut _, 2), 0);
 	}
 
 	Ok(rect)

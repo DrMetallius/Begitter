@@ -5,6 +5,7 @@ use std::mem;
 use failure;
 use winapi::Interface;
 use winapi::ctypes::c_int;
+use winapi::shared::basetsd::LONG_PTR;
 use winapi::shared::guiddef::GUID;
 use winapi::shared::minwindef::{DWORD, HINSTANCE, LOWORD, LPARAM, LRESULT, UINT, WORD, WPARAM, TRUE};
 use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT, RECT};
@@ -16,12 +17,12 @@ use winapi::um::shobjidl_core::{IShellItem, SIGDN_FILESYSPATH};
 use winapi::um::winnt::WCHAR;
 use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
 	IDC_ARROW, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE, DialogBoxParamW, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
-	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, WM_APP,
-	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, WS_CLIPCHILDREN, SetWindowTextW, LPNMHDR};
+	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, TRACKMOUSEEVENT, WM_APP,
+	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, WS_CLIPCHILDREN, SetWindowTextW, LPNMHDR, WNDPROC};
 use winapi::um::commctrl::{self, WC_TREEVIEW, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
 	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, NMLVDISPINFOW, NMITEMACTIVATE, WC_LISTVIEW, LVM_DELETEALLITEMS,
-	LVS_REPORT};
+	LVS_REPORT, NMLISTVIEW, LVHITTESTINFO};
 
 use super::helpers::*;
 use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
@@ -41,6 +42,22 @@ use ui::windows::utils::get_dialog_field_text;
 use winapi::um::commctrl::LVM_GETNEXTITEM;
 use winapi::um::commctrl::LVNI_SELECTED;
 use ui::windows::utils::set_dialog_field_text;
+use winapi::um::commctrl::LVS_EX_DOUBLEBUFFER;
+use winapi::um::commctrl::LVS_EX_AUTOSIZECOLUMNS;
+use winapi::um::winuser::WM_MOUSEMOVE;
+use winapi::shared::windowsx::GET_Y_LPARAM;
+use winapi::shared::windowsx::GET_X_LPARAM;
+use winapi::um::commctrl::LVM_HITTEST;
+use winapi::um::winuser::MapWindowPoints;
+use winapi::um::commctrl::LVHT_EX_ONCONTENTS;
+use winapi::um::winuser::GWLP_WNDPROC;
+use winapi::um::winuser::SetWindowLongPtrW;
+use winapi::um::winuser::TrackMouseEvent;
+use winapi::um::winuser::TME_LEAVE;
+use winapi::um::winuser::MK_LBUTTON;
+use winapi::um::commctrl::LVM_GETITEMRECT;
+use winapi::um::commctrl::LVIR_BOUNDS;
+use winapi::um::commctrl::LVM_GETITEMCOUNT;
 
 const MAIN_CLASS: &str = "main";
 
@@ -70,6 +87,8 @@ const GUID_FILE_DIALOG: GUID = GUID {
 
 static mut MAIN_VIEW: Option<MainView> = None;
 static mut MAIN_VIEW_RELAY: Option<Arc<MainViewRelay>> = None;
+
+static mut DEFAULT_COMBINED_PATCHES_LIST_VIEW_PROC: WNDPROC = None;
 
 pub fn run() -> Result<(), WinApiError> {
 	let main_menu = to_wstring(MAIN_MENU);
@@ -174,6 +193,32 @@ pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, 
 
 	unsafe {
 		DefWindowProcW(h_wnd, message, w_param, l_param)
+	}
+}
+
+pub extern "system" fn combined_patch_list_view_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+	let message_data = MessageData {
+		h_wnd,
+		message,
+		w_param,
+		l_param,
+	};
+
+	let handled = unsafe {
+		match MAIN_VIEW.as_mut() {
+			Some(main_view) => {
+				main_view.combined_patches_list_view_drag_tracker.receive_message(&message_data).unwrap()
+			},
+			None => false
+		}
+	};
+
+	if handled {
+		0 as LRESULT
+	} else {
+		unsafe {
+			DEFAULT_COMBINED_PATCHES_LIST_VIEW_PROC.unwrap()(h_wnd, message, w_param, l_param)
+		}
 	}
 }
 
@@ -287,6 +332,8 @@ struct MainView {
 	commit_strings: Vec<Vec<WideString>>,
 	combined_patches: Vec<ChangeSetInfo>,
 	combined_patch_strings: Vec<Vec<WideString>>,
+
+	combined_patches_list_view_drag_tracker: ListViewDragTracker
 }
 
 impl MainView {
@@ -319,14 +366,19 @@ impl MainView {
 				WS_VISIBLE | WS_CHILD | WS_VSCROLL, MainView::EDGE_MARGIN, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 
-		let combined_patches_list_view = try_get!(CreateWindowExW(0, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER |
-				WS_VISIBLE | WS_CHILD | WS_VSCROLL, MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0,
-				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		let combined_patches_list_view = try_get!(CreateWindowExW(LVS_EX_DOUBLEBUFFER, list_view_class.as_ptr(), null_mut(),
+				LVS_REPORT | WS_TABSTOP | WS_BORDER | WS_VISIBLE | WS_CHILD | WS_VSCROLL, MainView::COMMIT_AND_PATCH_HOR_POSITION,
+				MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		insert_columns_into_list_view(combined_patches_list_view, STRING_MAIN_PATCHES_COLUMNS)?;
 
-		let commits_list_view = try_get!(CreateWindowExW(0, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER | WS_VISIBLE |
+		let commits_list_view = try_get!(CreateWindowExW(LVS_EX_DOUBLEBUFFER, list_view_class.as_ptr(), null_mut(), LVS_REPORT | WS_TABSTOP | WS_BORDER | WS_VISIBLE |
 				WS_CHILD | WS_VSCROLL, 0, 0, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		insert_columns_into_list_view(commits_list_view, STRING_MAIN_COMMITS_COLUMNS)?;
+
+		let default_proc = try_call!(SetWindowLongPtrW(combined_patches_list_view, GWLP_WNDPROC, combined_patch_list_view_proc as LONG_PTR), 0);
+		unsafe {
+			DEFAULT_COMBINED_PATCHES_LIST_VIEW_PROC = Some(mem::transmute(default_proc));
+		}
 
 		set_fonts(main_window)?;
 
@@ -342,7 +394,8 @@ impl MainView {
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
 			commit_strings: Vec::new(),
-			combined_patch_strings: Vec::new()
+			combined_patch_strings: Vec::new(),
+			combined_patches_list_view_drag_tracker: ListViewDragTracker::new(combined_patches_list_view)
 		};
 
 		let rect = get_window_position(main_window, main_window)?;
@@ -352,7 +405,8 @@ impl MainView {
 	}
 
 	fn set_model(&mut self, model: MainModel) {
-		self.model = Some(model)
+		self.model = Some(model.clone());
+		self.combined_patches_list_view_drag_tracker.model = Some(model);
 	}
 
 	fn receive_model_message_on_main_thread(&mut self, message_data: &MessageData) -> Result<(), WinApiError> {
@@ -451,6 +505,11 @@ impl MainView {
 	}
 
 	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
+		let handled = self.combined_patches_list_view_drag_tracker.receive_message(message_data)?;
+		if handled {
+			return Ok(true)
+		}
+
 		let handled = match message_data.message {
 			winuser::WM_SIZING => {
 				let rect = unsafe { *(message_data.l_param as *const RECT) };
@@ -608,5 +667,124 @@ impl MainView {
 		try_call!(SetWindowPos(self.commits_label, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos - MainView::LABEL_HEIGHT,
 				MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, 0), 0);
 		Ok(())
+	}
+}
+
+struct ListViewDragTracker {
+	model: Option<MainModel>,
+	combined_patches_list_view: HWND,
+	item_positions: Option<usize> // Maybe we don't actually need the insertion position here
+}
+
+impl ListViewDragTracker {
+	fn new<'a>(combined_patches_list_view: HWND) -> ListViewDragTracker {
+		ListViewDragTracker {
+			model: None,
+			combined_patches_list_view,
+			item_positions: None
+		}
+	}
+
+	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
+		let handled = match message_data.message {
+			winuser::WM_NOTIFY => {
+				if unsafe { (*(message_data.l_param as LPNMHDR)).hwndFrom } != self.combined_patches_list_view {
+					false
+				} else {
+					let header = unsafe { *(message_data.l_param as LPNMHDR) };
+					match header.code {
+						commctrl::LVN_BEGINDRAG => {
+							let mut tracking_request: TRACKMOUSEEVENT = unsafe { mem::zeroed() };
+							tracking_request.cbSize = mem::size_of_val(&tracking_request) as DWORD;
+							tracking_request.dwFlags = TME_LEAVE;
+							tracking_request.hwndTrack = self.combined_patches_list_view;
+							try_call!(TrackMouseEvent(&mut tracking_request as *mut _ as *mut _), 0);
+
+							let item =  unsafe { *(message_data.l_param as *const NMLISTVIEW) };
+							self.item_positions = Some(item.iItem as usize);
+							true
+						}
+						_ => false
+					}
+				}
+			}
+			winuser::WM_MOUSEMOVE => {
+				let item_count = try_send_message!(self.combined_patches_list_view, LVM_GETITEMCOUNT, 0, 0);
+				if item_count <= 0 {
+					self.item_positions = None;
+					return Ok(false)
+				}
+
+				let reset = match &mut self.item_positions {
+					Some(_) => {
+						if message_data.w_param & MK_LBUTTON == 0 {
+							true
+						} else {
+							let x = GET_X_LPARAM(message_data.l_param);
+							let y = GET_Y_LPARAM(message_data.l_param);
+
+							let mut hit_test_info: LVHITTESTINFO = unsafe { mem::zeroed() };
+							hit_test_info.pt.x = x;
+							hit_test_info.pt.y = y;
+							try_call!(MapWindowPoints(message_data.h_wnd, self.combined_patches_list_view, &mut hit_test_info.pt as *mut _ as *mut _, 1), 0);
+
+							let index = try_send_message!(self.combined_patches_list_view, LVM_HITTEST, 0, &mut hit_test_info as *mut _ as LPARAM);
+
+						    self.calculate_insertion_position(message_data, item_count as usize)?; // TODO: draw the divider
+							false
+						}
+					}
+					None => true
+				};
+
+				if reset {
+					self.item_positions = None;
+				}
+				false
+			}
+			winuser::WM_LBUTTONUP => {
+				if let &Some(source_position) = &self.item_positions {
+					let item_count = try_send_message!(self.combined_patches_list_view, LVM_GETITEMCOUNT, 0, 0);
+					if item_count > 0 {
+						let insertion_position = self.calculate_insertion_position(message_data, item_count as usize)?;
+						self.model.as_ref().unwrap().move_patch(source_position, insertion_position);
+					}
+				}
+				self.item_positions = None;
+				false
+			}
+			winuser::WM_MOUSELEAVE => {
+				self.item_positions = None;
+				true
+			}
+			_ => false
+		};
+		Ok(handled)
+	}
+
+	fn calculate_insertion_position(&self, message_data: &MessageData, item_count: usize) -> Result<usize, WinApiError> {
+		let x = GET_X_LPARAM(message_data.l_param);
+		let y = GET_Y_LPARAM(message_data.l_param);
+
+		let mut hit_test_info: LVHITTESTINFO = unsafe { mem::zeroed() };
+		hit_test_info.pt.x = x;
+		hit_test_info.pt.y = y;
+		try_call!(MapWindowPoints(message_data.h_wnd, self.combined_patches_list_view, &mut hit_test_info.pt as *mut _ as *mut _, 1), 0);
+
+		let index = try_send_message!(self.combined_patches_list_view, LVM_HITTEST, 0, &mut hit_test_info as *mut _ as LPARAM);
+		let insertion_point = if index >= 0 {
+			index as usize
+		} else {
+			let mut bounds: RECT = unsafe { mem::zeroed() };
+			bounds.left = LVIR_BOUNDS;
+			try_send_message!(self.combined_patches_list_view, LVM_GETITEMRECT, 0, &mut bounds as *mut _ as LPARAM; 0);
+
+			if y < bounds.top {
+				0
+			} else {
+				item_count
+			}
+		};
+		Ok(insertion_point)
 	}
 }
