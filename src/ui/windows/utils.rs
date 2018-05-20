@@ -3,28 +3,19 @@ use std::ptr::null_mut;
 use std::ops::Range;
 
 use winapi::shared::basetsd::INT_PTR;
-use winapi::shared::minwindef::{DWORD, UINT, LPARAM, BOOL, TRUE, WPARAM, WORD};
+use winapi::shared::minwindef::{UINT, LPARAM, BOOL, TRUE, WPARAM, WORD};
 use winapi::shared::windef::{HWND, RECT, POINT};
 use winapi::um::commctrl::{LVITEMW, LVCOLUMNW, LVM_INSERTITEMW, LVM_INSERTCOLUMNW, LVCF_TEXT, LVCF_SUBITEM, LVCF_WIDTH, LVCF_FMT, LVCFMT_LEFT,
 	LVIF_TEXT, LVIF_STATE, LPSTR_TEXTCALLBACKW};
 use winapi::um::winuser::{WM_SETFONT, SPI_GETNONCLIENTMETRICS, GetWindowRect, SendMessageW, EnumChildWindows, MapWindowPoints, GetSubMenu,
-	TPM_RETURNCMD, TPM_TOPALIGN, TPM_LEFTALIGN, TrackPopupMenuEx};
+	TPM_RETURNCMD, TPM_TOPALIGN, TPM_LEFTALIGN, TrackPopupMenuEx, GetWindowTextLengthW, GetDlgItemTextW, EndDialog, GetDlgItem, SetWindowTextW,
+	GetClientRect};
 use winapi::um::wingdi::CreateFontIndirectW;
-use winapi::um::errhandlingapi::{SetLastError, GetLastError};
 use winapi::ctypes::c_int;
-use failure::Backtrace;
 
 use ui::windows::dpi::{GetDpiForWindow, NONCLIENTMETRICS, SystemParametersInfoForDpi};
-use ui::windows::helpers::WinApiError;
 use ui::windows::text::load_string;
-use ui::windows::helpers::MenuHandle;
-use winapi::um::winuser::GetWindowTextLengthW;
-use winapi::um::winuser::GetDlgItemTextW;
-use winapi::um::winuser::EndDialog;
-use winapi::um::winuser::GetDlgItem;
-use winapi::um::winuser::SetWindowTextW;
-use ui::windows::helpers::WideString;
-use ui::windows::helpers::to_wstring;
+use ui::windows::helpers::{MenuHandle, WideString, to_wstring, WinApiError};
 
 pub fn set_fonts(main_window: HWND) -> Result<(), WinApiError> {
 	let dpi = try_call!(GetDpiForWindow(main_window), 0);
@@ -50,18 +41,19 @@ pub fn set_fonts(main_window: HWND) -> Result<(), WinApiError> {
 }
 
 pub fn get_window_position(window: HWND, reference_window: HWND) -> Result<RECT, WinApiError> {
-	let mut rect = RECT {
-		top: 0,
-		left: 0,
-		right: 0,
-		bottom: 0
-	};
+	let mut rect: RECT = unsafe { mem::zeroed() };
 	try_call!(GetWindowRect(window, &mut rect as *mut _ as *mut _), 0);
 
 	if window != reference_window {
 		try_call!(MapWindowPoints(null_mut(), reference_window,&mut rect as *mut _ as *mut _, 2), 0);
 	}
 
+	Ok(rect)
+}
+
+pub fn get_window_client_area(window: HWND) -> Result<RECT, WinApiError> {
+	let mut rect: RECT = unsafe { mem::zeroed() };
+	try_call!(GetClientRect(window, &mut rect as *mut _ as *mut _), 0);
 	Ok(rect)
 }
 
