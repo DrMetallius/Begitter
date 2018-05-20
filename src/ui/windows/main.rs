@@ -1,13 +1,14 @@
 use std::ptr::null_mut;
 use std::sync::Arc;
 use std::mem;
+use std::borrow::Cow;
 
 use failure;
 use winapi::Interface;
 use winapi::ctypes::c_int;
-use winapi::shared::basetsd::LONG_PTR;
+use winapi::shared::basetsd::{LONG_PTR, INT_PTR};
 use winapi::shared::guiddef::GUID;
-use winapi::shared::minwindef::{DWORD, HINSTANCE, LOWORD, LPARAM, LRESULT, UINT, WORD, WPARAM, TRUE};
+use winapi::shared::minwindef::{DWORD, HINSTANCE, LOWORD, LPARAM, LRESULT, UINT, WORD, WPARAM, TRUE, FALSE};
 use winapi::shared::windef::{HBRUSH, HMENU, HWND, POINT, RECT};
 use winapi::shared::winerror::S_OK;
 use winapi::shared::wtypesbase::CLSCTX_INPROC_SERVER;
@@ -18,46 +19,24 @@ use winapi::um::winnt::WCHAR;
 use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
 	IDC_ARROW, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE, DialogBoxParamW, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, TRACKMOUSEEVENT, WM_APP,
-	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, WS_CLIPCHILDREN, SetWindowTextW, LPNMHDR, WNDPROC};
+	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, WS_CLIPCHILDREN, SetWindowTextW, LPNMHDR, WNDPROC,
+	FillRect, GWLP_WNDPROC, InvalidateRect, MapWindowPoints, MK_LBUTTON, SetWindowLongPtrW, TME_LEAVE,
+	TrackMouseEvent};
 use winapi::um::commctrl::{self, WC_TREEVIEW, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
 	TVGN_CARET, TVIF_PARAM, TVITEMEXW, TVM_GETITEMW, TVIF_HANDLE, NMLVDISPINFOW, NMITEMACTIVATE, WC_LISTVIEW, LVM_DELETEALLITEMS,
-	LVS_REPORT, NMLISTVIEW, LVHITTESTINFO};
+	LVS_REPORT, NMLISTVIEW, LVHITTESTINFO, LVIR_BOUNDS, LVIR_SELECTBOUNDS, LVM_GETCOLUMNWIDTH, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
+	LVM_GETNEXTITEM, LVM_HITTEST, LVNI_SELECTED, LVS_EX_DOUBLEBUFFER};
+use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 
 use super::helpers::*;
 use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
 use ui::windows::text::{load_string, STRING_MAIN_PATCHES_COLUMNS, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES,
-	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS};
-use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view};
+	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS, format_time};
+use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view, close_dialog,
+	get_dialog_field_text, get_window_client_area, set_dialog_field_text, show_context_menu};
 use ui::windows::dpi::GetDpiForWindow;
-use ui::windows::text::format_time;
-use std::borrow::Cow;
-use ui::windows::utils::show_context_menu;
-use winapi::shared::basetsd::INT_PTR;
-use winapi::shared::minwindef::FALSE;
-use winapi::um::winuser::EndDialog;
-use ui::windows::utils::close_dialog;
-use ui::windows::utils::get_dialog_field_text;
-use winapi::um::commctrl::LVM_GETNEXTITEM;
-use winapi::um::commctrl::LVNI_SELECTED;
-use ui::windows::utils::set_dialog_field_text;
-use winapi::um::commctrl::LVS_EX_DOUBLEBUFFER;
-use winapi::um::commctrl::LVS_EX_AUTOSIZECOLUMNS;
-use winapi::um::winuser::WM_MOUSEMOVE;
-use winapi::shared::windowsx::GET_Y_LPARAM;
-use winapi::shared::windowsx::GET_X_LPARAM;
-use winapi::um::commctrl::LVM_HITTEST;
-use winapi::um::winuser::MapWindowPoints;
-use winapi::um::commctrl::LVHT_EX_ONCONTENTS;
-use winapi::um::winuser::GWLP_WNDPROC;
-use winapi::um::winuser::SetWindowLongPtrW;
-use winapi::um::winuser::TrackMouseEvent;
-use winapi::um::winuser::TME_LEAVE;
-use winapi::um::winuser::MK_LBUTTON;
-use winapi::um::commctrl::LVM_GETITEMRECT;
-use winapi::um::commctrl::LVIR_BOUNDS;
-use winapi::um::commctrl::LVM_GETITEMCOUNT;
 
 const MAIN_CLASS: &str = "main";
 
@@ -204,22 +183,27 @@ pub extern "system" fn combined_patch_list_view_proc(h_wnd: HWND, message: UINT,
 		l_param,
 	};
 
-	let handled = unsafe {
-		match MAIN_VIEW.as_mut() {
-			Some(main_view) => {
-				main_view.combined_patches_list_view_drag_tracker.receive_message(&message_data).unwrap()
-			},
-			None => false
-		}
-	};
+	let handled= unsafe { MAIN_VIEW.as_mut() }
+			.map(|main_view| {
+				main_view.combined_patches_list_view_drag_tracker
+						.pre_message_processing(&message_data)
+						.unwrap()
+			})
+			.unwrap_or(false);
 
-	if handled {
+	let result = if handled {
 		0 as LRESULT
 	} else {
 		unsafe {
 			DEFAULT_COMBINED_PATCHES_LIST_VIEW_PROC.unwrap()(h_wnd, message, w_param, l_param)
 		}
-	}
+	};
+
+	unsafe { MAIN_VIEW.as_mut() }.map(|main_view| {
+		main_view.combined_patches_list_view_drag_tracker.post_message_processing(&message_data)
+	});
+
+	result
 }
 
 pub extern "system" fn edit_message_dialog_proc(hwnd_dlg: HWND, u_msg : UINT, w_param: WPARAM, l_param: LPARAM) -> INT_PTR {
@@ -327,7 +311,6 @@ struct MainView {
 	combined_patches_list_view: HWND,
 
 	branches: Vec<BranchItem>,
-	active_branch: Option<String>,
 	commits: Vec<Commit>,
 	commit_strings: Vec<Vec<WideString>>,
 	combined_patches: Vec<ChangeSetInfo>,
@@ -390,7 +373,6 @@ impl MainView {
 			combined_patches_list_view,
 			commits_list_view,
 			branches: Vec::new(),
-			active_branch: None,
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
 			commit_strings: Vec::new(),
@@ -505,7 +487,7 @@ impl MainView {
 	}
 
 	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
-		let handled = self.combined_patches_list_view_drag_tracker.receive_message(message_data)?;
+		let handled = self.combined_patches_list_view_drag_tracker.pre_message_processing(message_data)?;
 		if handled {
 			return Ok(true)
 		}
@@ -621,7 +603,7 @@ impl MainView {
 					self.main_window, Some(edit_message_dialog_proc), original_text as LPARAM) };
 				let mut text = match text_box_ptr {
 					0 => return Ok(false),
-					checked_text_box_ptr => {
+					_ => {
 						*unsafe { Box::from_raw(text_box_ptr as *mut WideString) }
 					}
 				};
@@ -673,7 +655,7 @@ impl MainView {
 struct ListViewDragTracker {
 	model: Option<MainModel>,
 	combined_patches_list_view: HWND,
-	item_positions: Option<usize> // Maybe we don't actually need the insertion position here
+	item_positions: Option<(usize, usize)>
 }
 
 impl ListViewDragTracker {
@@ -685,7 +667,13 @@ impl ListViewDragTracker {
 		}
 	}
 
-	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
+	fn invalidate(&self) -> Result<(), WinApiError> {
+		let client_area = get_window_client_area(self.combined_patches_list_view)?;
+		try_call!(InvalidateRect(self.combined_patches_list_view, &client_area as *const RECT, TRUE), 0);
+		Ok(())
+	}
+
+	fn pre_message_processing(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
 		let handled = match message_data.message {
 			winuser::WM_NOTIFY => {
 				if unsafe { (*(message_data.l_param as LPNMHDR)).hwndFrom } != self.combined_patches_list_view {
@@ -701,7 +689,8 @@ impl ListViewDragTracker {
 							try_call!(TrackMouseEvent(&mut tracking_request as *mut _ as *mut _), 0);
 
 							let item =  unsafe { *(message_data.l_param as *const NMLISTVIEW) };
-							self.item_positions = Some(item.iItem as usize);
+							self.item_positions = Some((item.iItem as usize, item.iItem as usize));
+							self.invalidate()?;
 							true
 						}
 						_ => false
@@ -715,10 +704,10 @@ impl ListViewDragTracker {
 					return Ok(false)
 				}
 
-				let reset = match &mut self.item_positions {
+				let new_insertion_position = match self.item_positions {
 					Some(_) => {
 						if message_data.w_param & MK_LBUTTON == 0 {
-							true
+							None
 						} else {
 							let x = GET_X_LPARAM(message_data.l_param);
 							let y = GET_Y_LPARAM(message_data.l_param);
@@ -728,29 +717,36 @@ impl ListViewDragTracker {
 							hit_test_info.pt.y = y;
 							try_call!(MapWindowPoints(message_data.h_wnd, self.combined_patches_list_view, &mut hit_test_info.pt as *mut _ as *mut _, 1), 0);
 
-							let index = try_send_message!(self.combined_patches_list_view, LVM_HITTEST, 0, &mut hit_test_info as *mut _ as LPARAM);
-
-						    self.calculate_insertion_position(message_data, item_count as usize)?; // TODO: draw the divider
-							false
+							Some(self.calculate_insertion_position(message_data, item_count as usize)?)
 						}
 					}
-					None => true
+					None => None
 				};
 
-				if reset {
-					self.item_positions = None;
+				match new_insertion_position {
+					None => self.item_positions = None,
+					Some(new_position) => {
+						if let &mut Some((_, ref mut position)) = &mut self.item_positions {
+							*position = new_position;
+						} else {
+							panic!("Currently not in dragging mode");
+						}
+						self.invalidate()?;
+					}
 				}
 				false
 			}
 			winuser::WM_LBUTTONUP => {
-				if let &Some(source_position) = &self.item_positions {
+				if let &Some((source_position, _)) = &self.item_positions {
 					let item_count = try_send_message!(self.combined_patches_list_view, LVM_GETITEMCOUNT, 0, 0);
 					if item_count > 0 {
 						let insertion_position = self.calculate_insertion_position(message_data, item_count as usize)?;
 						self.model.as_ref().unwrap().move_patch(source_position, insertion_position);
+
+						self.item_positions = None;
+						self.invalidate()?;
 					}
 				}
-				self.item_positions = None;
 				false
 			}
 			winuser::WM_MOUSELEAVE => {
@@ -760,6 +756,44 @@ impl ListViewDragTracker {
 			_ => false
 		};
 		Ok(handled)
+	}
+
+	fn post_message_processing(&mut self, message_data: &MessageData) -> Result<(), WinApiError> {
+		if message_data.message != winuser::WM_PAINT {
+			return Ok(());
+		}
+
+		let item_count = try_send_message!(self.combined_patches_list_view, LVM_GETITEMCOUNT, 0, 0);
+		if item_count <= 0 {
+			self.item_positions = None;
+			return Ok(())
+		}
+		let item_count = item_count as usize;
+
+		let insertion_position = match self.item_positions {
+			Some((_, insertion_position)) => insertion_position,
+			None => return Ok(())
+		};
+
+		let mut rect: RECT = unsafe { mem::zeroed() };
+		rect.left = LVIR_SELECTBOUNDS;
+		let index = if insertion_position >= item_count { insertion_position - 1} else { insertion_position };
+		try_send_message!(self.combined_patches_list_view, LVM_GETITEMRECT, index, &mut rect as *mut _ as LPARAM);
+
+		let insertion_mark_vert_center = if insertion_position >= item_count { rect.bottom } else { rect.top };
+		let column_width = try_send_message!(self.combined_patches_list_view, LVM_GETCOLUMNWIDTH, 0, 0) as c_int;
+		let insertion_mark_rect = RECT {
+			left: rect.left,
+			right: rect.left + column_width,
+			top: insertion_mark_vert_center - 1,
+			bottom: insertion_mark_vert_center + 1
+		};
+
+		let data_holder = PaintingDataHolder::new(self.combined_patches_list_view)?;
+		let brush = Brush::new_solid(0xFF, 0, 0)?;
+		try_call!(FillRect(data_holder.context(), &insertion_mark_rect, brush.brush()), 0);
+
+		Ok(())
 	}
 
 	fn calculate_insertion_position(&self, message_data: &MessageData, item_count: usize) -> Result<usize, WinApiError> {

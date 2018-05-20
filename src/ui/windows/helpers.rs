@@ -7,11 +7,12 @@ use std::result::Result::Ok;
 
 use winapi::Interface;
 use winapi::shared::ntdef::PWSTR;
-use winapi::shared::minwindef::HINSTANCE;
-use winapi::shared::windef::HMENU;
+use winapi::shared::minwindef::{HINSTANCE, BYTE};
+use winapi::shared::windef::{HGDIOBJ, HMENU, HDC, HWND, HBRUSH};
 use winapi::um::combaseapi::CoTaskMemFree;
 use winapi::um::unknwnbase::IUnknown;
-use winapi::um::winuser::{LoadMenuW, DestroyMenu};
+use winapi::um::winuser::{LoadMenuW, DestroyMenu, GetDC, ReleaseDC};
+use winapi::um::wingdi::{RGB, CreateSolidBrush, DeleteObject};
 use libc::wcslen;
 use failure::Backtrace;
 
@@ -246,6 +247,62 @@ impl Drop for MenuHandle {
 	fn drop(&mut self) {
 		unsafe {
 			DestroyMenu(self.handle);
+		}
+	}
+}
+
+pub struct PaintingDataHolder {
+	h_wnd: HWND,
+	context: HDC
+}
+
+impl PaintingDataHolder {
+	pub fn new(h_wnd: HWND) -> Result<PaintingDataHolder, WinApiError> {
+		let context = try_get!(GetDC(h_wnd));
+
+		Ok(PaintingDataHolder {
+			h_wnd,
+			context,
+		})
+	}
+
+	pub fn context(&self) -> HDC {
+		self.context
+	}
+}
+
+impl Drop for PaintingDataHolder {
+	fn drop(&mut self) {
+		unsafe {
+			ReleaseDC(self.h_wnd, self.context);
+		}
+	}
+}
+
+pub struct Brush {
+	brush: HBRUSH
+}
+
+impl Brush {
+	pub fn new_solid(red: BYTE, green: BYTE, blue: BYTE) -> Result<Brush, WinApiError> {
+		let color = RGB(red, green, blue);
+		let brush = try_get!(CreateSolidBrush(color));
+
+		Ok(Brush {
+			brush
+		})
+	}
+
+	pub fn brush(&self) -> HBRUSH {
+		self.brush
+	}
+}
+
+impl Drop for Brush {
+	fn drop(&mut self) {
+		let result = unsafe { DeleteObject(self.brush as HGDIOBJ ) };
+		if result == 0 {
+			panic!("Invalid brush handle or it is currently selected into a device context");
 		}
 	}
 }
