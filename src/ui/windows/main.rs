@@ -37,6 +37,7 @@ use ui::windows::text::{load_string, STRING_MAIN_PATCHES_COLUMNS, STRING_MAIN_WI
 use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view, close_dialog,
 	get_dialog_field_text, get_window_client_area, set_dialog_field_text, show_context_menu};
 use ui::windows::dpi::GetDpiForWindow;
+use begitter::model::View;
 
 const MAIN_CLASS: &str = "main";
 
@@ -127,47 +128,30 @@ pub fn run() -> Result<(), WinApiError> {
 }
 
 pub extern "system" fn window_proc(h_wnd: HWND, message: UINT, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-	let result = match message {
-		winuser::WM_DESTROY => {
-			unsafe {
-				PostQuitMessage(0);
-			}
-			Some(0)
+	if message == winuser::WM_DESTROY {
+		unsafe {
+			PostQuitMessage(0);
 		}
-		winuser::WM_COMMAND => {
-			match LOWORD(w_param as DWORD) {
-				ID_MENU_OPEN => {
-					if let Ok(dir) = show_open_file_dialog(h_wnd) {
-						unsafe {
-							MAIN_VIEW.as_mut().unwrap().set_model(MainModel::new(MAIN_VIEW_RELAY.as_mut().unwrap().clone(), dir));
-						}
-					}
-					Some(0)
-				}
-				_ => None
+		return 0;
+	}
+
+	let handled = unsafe {
+		match MAIN_VIEW.as_mut() {
+			Some(view) => {
+				let message_data = MessageData {
+					h_wnd,
+					message,
+					w_param,
+					l_param,
+				};
+				view.receive_message(&message_data).unwrap()
 			}
-		}
-		_ => {
-			let handled = unsafe {
-				match MAIN_VIEW.as_mut() {
-					Some(view) => {
-						let message_data = MessageData {
-							h_wnd,
-							message,
-							w_param,
-							l_param,
-						};
-						view.receive_message(&message_data).unwrap()
-					}
-					None => false
-				}
-			};
-			if handled { Some(0) } else { None }
+			None => false
 		}
 	};
 
-	if let Some(result_code) = result {
-		return result_code;
+	if handled {
+		return 0;
 	}
 
 	unsafe {
@@ -277,11 +261,13 @@ unsafe impl Send for MainViewRelay {}
 
 unsafe impl Sync for MainViewRelay {}
 
-impl MainViewReceiver for MainViewRelay {
+impl View for MainViewRelay {
 	fn error(&self, error: failure::Error) {
 		println!("We've got an error: {}\n{}", error, error.backtrace()); // TODO: this is not proper error handling
 	}
+}
 
+impl MainViewReceiver for MainViewRelay {
 	fn show_branches(&self, branches: Vec<BranchItem>) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::Branches(branches)).map_err(|err| err.into())
 	}
@@ -500,6 +486,17 @@ impl MainView {
 				self.reposition_views(width, height)?;
 				true
 			}
+			winuser::WM_COMMAND => {
+				match LOWORD(message_data.w_param as DWORD) {
+					ID_MENU_OPEN => {
+						if let Ok(dir) = show_open_file_dialog(self.main_window) {
+							self.set_model(MainModel::new(unsafe { MAIN_VIEW_RELAY.as_mut() }.unwrap().clone(), dir));
+						}
+						true
+					}
+					_ => false
+				}
+			}
 			winuser::WM_NOTIFY => {
 				let header = unsafe { *(message_data.l_param as LPNMHDR) };
 				match header.code {
@@ -642,7 +639,7 @@ impl MainView {
 
 		let patches_height = (client_area_height - 2 * (MainView::EDGE_MARGIN + MainView::LABEL_HEIGHT)) / 2;
 		let commits_and_patches_hor_pos = client_area_width - MainView::COMMIT_AND_PATCH_HOR_POSITION - MainView::EDGE_MARGIN;
-		let commits_vert_pos = MainView::EDGE_MARGIN + 2 * MainView::LABEL_HEIGHT + patches_height;
+		let commits_vert_pos = MainView::EDGE_MARGIN + 2 * MainView::LABEL_HEIGHT + patches_height + 6;
 		try_call!(SetWindowPos(self.combined_patches_list_view, null_mut(), 0, 0, commits_and_patches_hor_pos, patches_height, SWP_NOMOVE), 0);
 		try_call!(SetWindowPos(self.commits_list_view, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos, commits_and_patches_hor_pos,
 				client_area_height - commits_vert_pos - MainView::EDGE_MARGIN, 0), 0);

@@ -1,6 +1,4 @@
 use std::ffi::OsStr;
-use std::thread;
-use std::sync;
 use std::sync::Arc;
 use std::ffi::OsString;
 
@@ -11,7 +9,9 @@ use change_set::{Commit, CombinedPatch, ChangeSetInfo};
 use patch_editor::parser::parse_combined_patch;
 use std::collections::HashMap;
 use model::main::Command::SetPatchMessage;
+use model::{Model, View};
 
+#[derive(Clone)]
 enum Command {
 	GetBranches,
 	ImportCommits(Vec<Commit>),
@@ -19,51 +19,45 @@ enum Command {
 	MovePatch(usize, usize),
 	DeletePatch(usize),
 	ApplyCommits(Commit),
-	SwitchToBranch(String)
+	SwitchToBranch(String),
+}
+
+struct State {
+	git: Git,
+	combined_patches: Vec<CombinedPatch>,
 }
 
 #[derive(Clone)]
 pub struct MainModel {
-	worker_sink: sync::mpsc::Sender<Command>
+	base: Model<Command>
 }
 
 impl MainModel {
-	pub fn new<S: AsRef<OsStr>>(view: Arc<MainViewReceiver>, repo_dir: S) -> MainModel {
-		let (sender, receiver) = sync::mpsc::channel();
+	pub fn new<V: MainViewReceiver, S: AsRef<OsStr>>(view: Arc<V>, repo_dir: S) -> MainModel {
+		let base = Model::new(view, repo_dir.as_ref().into(), move |repo_dir_owned: OsString| {
+			Ok(State {
+				git: Git::new(repo_dir_owned),
+				combined_patches: Vec::new(),
+			})
+		}, MainModel::perform_command);
 
 		let model = MainModel {
-			worker_sink: sender
+			base
 		};
-
-		let view_ref = view.clone();
-		let repo_dir_owned: OsString = repo_dir.as_ref().into();
-		thread::spawn(move || {
-			let mut git = Git::new(repo_dir_owned);
-			let mut combined_patches = Vec::<CombinedPatch>::new();
-			loop {
-				let command = match receiver.recv() {
-					Ok(command) => command,
-					Err(_) => break
-				};
-				let result = MainModel::perform_command(&*view_ref, &mut git, &mut combined_patches, command);
-				if let Err(error) = result {
-					view.error(error);
-				}
-			}
-		});
-
-		model.worker_sink.send(Command::GetBranches).unwrap();
+		model.base.send(Command::GetBranches);
 		model
 	}
 
-	fn perform_command(view: &MainViewReceiver, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>, command: Command) -> Result<(), failure::Error> {
-		fn show_combined_patches(view: &MainViewReceiver, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
+	fn perform_command<V: MainViewReceiver>(view: &V, ref mut state: &mut State, command: Command) -> Result<(), failure::Error> {
+		let State { ref mut git, ref mut combined_patches } = state;
+
+		fn show_combined_patches<V: MainViewReceiver>(view: &V, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
 			view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
 		}
 
 		match command {
 			Command::GetBranches => {
-				MainModel::get_branches_and_commits(view, git, combined_patches)?;
+				MainModel::get_branches_and_commits(view, state)?;
 			}
 			Command::ImportCommits(commits) => {
 				let mut new_combined_patches = Vec::<CombinedPatch>::new();
@@ -72,7 +66,7 @@ impl MainModel {
 					let patches = parse_combined_patch(combined_patch_data.as_bytes())?;
 					let combined_patch = CombinedPatch {
 						info: commit.info.change_set_info,
-						patches
+						patches,
 					};
 					new_combined_patches.push(combined_patch);
 				}
@@ -143,25 +137,27 @@ impl MainModel {
 					applied_patches += 1;
 				}
 
-				git.update_ref(&active_branch, &target_commit.unwrap())?;
-				git.symbolic_ref_update("HEAD", &active_branch)?;
-
 				let patches_left = combined_patches.len() - applied_patches;
 				combined_patches.truncate(patches_left);
 
-				MainModel::get_branches_and_commits(view, git, combined_patches)?;
+				if patches_left == 0 {
+					git.update_ref(&active_branch, &target_commit.unwrap())?;
+					git.symbolic_ref_update("HEAD", &active_branch)?;
+				}
+
+				MainModel::get_branches_and_commits(view, state)?;
 			}
 			Command::SwitchToBranch(ref_name) => {
 				git.symbolic_ref_update("HEAD", &ref_name)?;
-				MainModel::get_branches_and_commits(view, git, combined_patches)?;
+				MainModel::get_branches_and_commits(view, state)?;
 			}
 		}
 		Ok(())
 	}
 
-	fn get_branches_and_commits(view: &MainViewReceiver, git: &mut Git, combined_patches: &mut Vec<CombinedPatch>) -> Result<(), failure::Error> {
+	fn get_branches_and_commits(view: &MainViewReceiver, State { ref mut git, ref mut combined_patches }: &mut State) -> Result<(), failure::Error> {
 		let refs = git.show_refs_heads()?;
-		let unprocessed_parts_to_refs= refs
+		let unprocessed_parts_to_refs = refs
 				.iter()
 				.filter(|ref_name| ref_name.starts_with(git::BRANCH_PREFIX))
 				.map(|ref_name| (&ref_name[git::BRANCH_PREFIX.len()..], ref_name.as_str()))
@@ -186,27 +182,27 @@ impl MainModel {
 	}
 
 	pub fn import_commits(&self, commits: Vec<Commit>) {
-		self.worker_sink.send(Command::ImportCommits(commits)).unwrap();
+		self.base.send(Command::ImportCommits(commits));
 	}
 
 	pub fn set_patch_message(&self, patch_index: usize, message: String) {
-		self.worker_sink.send(Command::SetPatchMessage(patch_index, message));
+		self.base.send(Command::SetPatchMessage(patch_index, message));
 	}
 
 	pub fn move_patch(&self, source_position: usize, insertion_position: usize) {
-		self.worker_sink.send(Command::MovePatch(source_position, insertion_position)).unwrap();
+		self.base.send(Command::MovePatch(source_position, insertion_position));
 	}
 
 	pub fn delete(&self, patch_index: usize) {
-		self.worker_sink.send(Command::DeletePatch(patch_index));
+		self.base.send(Command::DeletePatch(patch_index));
 	}
 
 	pub fn apply_patches(&self, first_commit_to_replace: Commit) {
-		self.worker_sink.send(Command::ApplyCommits(first_commit_to_replace)).unwrap();
+		self.base.send(Command::ApplyCommits(first_commit_to_replace));
 	}
 
 	pub fn switch_to_branch(&self, ref_name: &str) {
-		self.worker_sink.send(Command::SwitchToBranch(String::from(ref_name))).unwrap();
+		self.base.send(Command::SwitchToBranch(String::from(ref_name)));
 	}
 }
 
@@ -216,25 +212,24 @@ enum MainModelError {
 	ApplyPatchesError(String, Backtrace),
 }
 
-pub trait MainViewReceiver: Sync + Send {
-	fn error(&self, error: failure::Error);
+pub trait MainViewReceiver: View {
 	fn show_branches(&self, branches: Vec<BranchItem>) -> Result<(), failure::Error>;
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error>;
 	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error>;
 }
 
- pub enum BranchItem {
-	 Folder {
-		 display_name: String,
-		 children: Vec<BranchItem>,
-		 has_active_child: bool
-	 },
-	 Branch {
-		 ref_name: String,
-		 display_name: String,
-		 active: bool
-	 }
- }
+pub enum BranchItem {
+	Folder {
+		display_name: String,
+		children: Vec<BranchItem>,
+		has_active_child: bool,
+	},
+	Branch {
+		ref_name: String,
+		display_name: String,
+		active: bool,
+	},
+}
 
 impl BranchItem {
 	fn from_refs(unprocessed_parts_to_refs_map: Vec<(&str, &str)>, active_branch: &Option<&str>) -> Vec<BranchItem> {
@@ -263,7 +258,7 @@ impl BranchItem {
 						let sub_items = vec![(&rest[1..], ref_name)];
 						folders.insert(folder_name, (sub_items, active));
 					}
-				},
+				}
 				None => {
 					let branch = BranchItem::Branch {
 						ref_name: ref_name.into(),
@@ -282,7 +277,7 @@ impl BranchItem {
 					BranchItem::Folder {
 						display_name: folder_name.into(),
 						children,
-						has_active_child
+						has_active_child,
 					}
 				})
 				.collect();
