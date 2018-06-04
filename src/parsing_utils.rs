@@ -1,8 +1,37 @@
-use nom::not_line_ending;
+use nom::{Needed, not_line_ending, IResult, AtEof, types::CompleteByteSlice, AsBytes};
+use std::ops::Deref;
+
+macro_rules! parse_as_complete (
+	($i:expr, $submac:ident!( $($args:tt)* )) => (
+		{
+			use nom::Context;
+
+			fn convert_context<E>(context: Context<CompleteByteSlice, E>) -> Context<&[u8], E> {
+				let (input, err) = match context {
+					Context::Code(CompleteByteSlice(input), err) => (input, err)
+				};
+				Context::Code(input, err)
+			}
+
+			let input = CompleteByteSlice($i);
+			match $submac!(input, $($args)*) {
+		        Err(err) => match err {
+		            Err::Incomplete(needed) => Err(Err::Incomplete(needed)),
+		            Err::Error(context) => Err(Err::Error(convert_context(context))),
+		            Err::Failure(context) => Err(Err::Failure(convert_context(context)))
+		        },
+		        Ok((rest, output)) => Ok((rest.0, output.0))
+			}
+		}
+	);
+	($i:expr, $f:expr) => (
+		parse_as_complete!($i, call!($f));
+	);
+);
 
 named!(
 	pub file_name<Vec<u8>>,
-	alt!(quoted_name | map!(not_line_ending, |slice| (if slice.ends_with(&b"\t"[..]) { &slice[..slice.len() - 1] } else { slice }).into()))
+	alt!(quoted_name | map!(parse_as_complete!(not_line_ending), |slice| (if slice.ends_with(&b"\t"[..]) { &slice[..slice.len() - 1] } else { slice }).into()))
 );
 
 named!(
@@ -47,6 +76,6 @@ mod test {
 	#[test]
 	fn test_unescape() {
 		let escaped_data = br#""\320\241\321\202\321\200\320\260\320\275\320\275\321\213\320\271 \321\204\320\260\320\271\320\273.txt""#;
-		assert_eq!("Странный файл.txt".as_bytes(), &*file_name(&escaped_data[..]).to_result().unwrap());
+		assert_eq!("Странный файл.txt".as_bytes(), &*file_name(&escaped_data[..]).unwrap().1);
 	}
 }

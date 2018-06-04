@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Alexander Gazarov <unrealrider@gmail.com>"]
 
 [dependencies]
-nom = "^3.2"
+nom = "^4.0"
 failure = "^0.1"
 
 [target.'cfg(windows)'.dependencies]

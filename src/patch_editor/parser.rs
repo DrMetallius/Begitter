@@ -1,6 +1,4 @@
-use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, space, Needed};
-use nom::{IResult, IError};
-use nom::IResult::{Done, Incomplete};
+use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, space, Needed, IResult, ErrorKind, Err, types::CompleteByteSlice};
 use std::ops::Range;
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
@@ -55,7 +53,7 @@ struct PatchParts<'a> {
 #[derive(Fail, Debug)]
 pub enum ParseError {
 	#[fail(display = "Unable to read the patch: {:?}", _0)]
-	LexerError(IError<u32>),
+	LexerError(ErrorKind<u32>),
 	#[fail(display = "Error when parsing Unicode input: {}", _0)]
 	EncodingError(FromUtf8Error),
 	#[fail(display = "Error when parsing an int value: {}", _0)]
@@ -66,9 +64,9 @@ pub enum ParseError {
 	PartAbsent(&'static str),
 }
 
-impl From<IError<u32>> for ParseError {
-	fn from(error: IError<u32>) -> Self {
-		ParseError::LexerError(error)
+impl<I> From<Err<I, u32>> for ParseError {
+	fn from(error: Err<I, u32>) -> Self {
+		ParseError::LexerError(error.into_error_kind())
 	}
 }
 
@@ -146,7 +144,7 @@ enum Operation {
 }
 
 pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch>, ParseError> {
-	let patch_parts_vec = combined_patch(input).to_full_result()?;
+	let (_, patch_parts_vec) = combined_patch(input)?;
 	patch_parts_vec.into_iter()
 			.map(|patch_parts| patch_from_parts(patch_parts))
 			.collect()
@@ -154,7 +152,7 @@ pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch>, ParseErro
 
 // To get the patch, run "git log --follow -p -1 --format= <file-path>"
 pub fn parse_patch(input: &[u8]) -> Result<Patch, ParseError> {
-	let patch_parts = patch(input).to_full_result()?;
+	let (_, patch_parts) = patch(input)?;
 	patch_from_parts(patch_parts)
 }
 
@@ -248,13 +246,13 @@ fn patch_from_parts<'a>(PatchParts { names, parts }: PatchParts<'a>) -> Result<P
 	})
 }
 
-named!(combined_patch<Vec<PatchParts>>, many1!(patch));
+named!(combined_patch<Vec<PatchParts>>, many1!(complete!(patch)));
 
 named!(
 	patch<PatchParts>,
 	do_parse!(
 		names: patch_header >>
-		parts: many1!(patch_part) >>
+		parts: many1!(complete!(patch_part)) >>
 		(PatchParts {
 			names,
 			parts
@@ -275,7 +273,7 @@ named!(
 				(Some((name, other_name)))
 			) |
 			do_parse!(
-				name: map_opt!(map!(take_until!("\""), |name| trim_right(name)), trim_to_slash_inclusive) >>
+				name: map_opt!(map!(take_until_either!("\"\n"), |name| trim_right(name)), trim_to_slash_inclusive) >>
 				other_name: map_opt!(quoted_name, trim_to_slash_inclusive) >>
 				line_ending >>
 				(Some((name, other_name)))
@@ -304,7 +302,7 @@ fn trim_right(input: &[u8]) -> &[u8] {
 fn matching_name_pair(input: &[u8]) -> IResult<&[u8], Option<(Vec<u8>, Vec<u8>)>> {
 	let line_end = match input.iter().position(|item| *item == b'\n') {
 		Some(position) => position,
-		None => return Incomplete(Needed::Unknown)
+		None => return Err(Err::Incomplete(Needed::Unknown))
 	};
 
 	let mut separator_start = 0;
@@ -322,7 +320,7 @@ fn matching_name_pair(input: &[u8]) -> IResult<&[u8], Option<(Vec<u8>, Vec<u8>)>
 		if let Some(name) = trim_to_slash_inclusive(&input[0..separator_start]) {
 			if let Some(other_name) = trim_to_slash_inclusive(&input[separator_end..line_end]) {
 				if name == other_name {
-					return Done(&input[line_end + 1..], Some((name, other_name)));
+					return Ok((&input[line_end + 1..], Some((name, other_name))));
 				}
 			}
 		}
@@ -330,12 +328,12 @@ fn matching_name_pair(input: &[u8]) -> IResult<&[u8], Option<(Vec<u8>, Vec<u8>)>
 		separator_start = separator_end + 1;
 	}
 
-	return Done(&input[line_end..], None);
+	return Ok((&input[line_end..], None));
 }
 
 named!(
-	patch_part<PatchPart<'a>>,
-	alt!(
+	patch_part<PatchPart>,
+	alt_complete!(
 		map!(hunk, |hunk| PatchPart::Hunk(hunk)) |
 		similarity |
 		name |
@@ -347,7 +345,7 @@ named!(
 );
 
 named!(
-	index<PatchPart<'a>>,
+	index<PatchPart>,
 	do_parse!(
 		tag!("index ") >>
 		hashes: separated_pair!(
@@ -366,7 +364,7 @@ named!(
 );
 
 named!(
-	mode_change<PatchPart<'a>>,
+	mode_change<PatchPart>,
 	do_parse!(
 		order: alt!(value!(Order::Old, tag!("old mode ")) | value!(Order::New, tag!("new mode "))) >>
 		mode: take_while!(is_oct_digit) >>
@@ -376,7 +374,7 @@ named!(
 );
 
 named!(
-	name_change<PatchPart<'a>>,
+	name_change<PatchPart>,
 	do_parse!(
 		change_type_and_order: alt!(
 			value!((NameChangeType::Rename, Order::Old), alt!(tag!("rename old ") | tag!("rename from "))) |
@@ -391,7 +389,7 @@ named!(
 );
 
 named!(
-	presence_change<PatchPart<'a>>,
+	presence_change<PatchPart>,
 	do_parse!(
 		change_type: alt!(value!(PresenceChangeType::Removed, tag!("deleted file mode ")) | value!(PresenceChangeType::Added, tag!("new file mode "))) >>
 		mode: take_while!(is_oct_digit) >>
@@ -404,7 +402,7 @@ named!(
 );
 
 named!(
-	name<PatchPart<'a>>,
+	name<PatchPart>,
 	do_parse!(
 		order: alt!(value!(Order::Old, tag!("--- ")) | value!(Order::New, tag!("+++ "))) >>
 		name: map_opt!(file_name, trim_to_slash_inclusive) >>
@@ -414,7 +412,7 @@ named!(
 );
 
 named!(
-	similarity<PatchPart<'a>>,
+	similarity<PatchPart>,
 	do_parse!(
 		dissimilarity_flag: alt!(value!(false, tag!("similarity index ")) | value!(true, tag!("dissimilarity index "))) >>
 		score: digit >>
@@ -487,11 +485,11 @@ fn hunk_data(input: &[u8], old_file_range: Range<usize>, new_file_range: Range<u
 		}
 	}
 
-	Done(&input[bytes_consumed_total..], Hunk {
+	Ok((&input[bytes_consumed_total..], Hunk {
 		old_file_range,
 		new_file_range,
 		data: input[..bytes_consumed_total].into(),
-	})
+	}))
 }
 
 named!(
@@ -529,7 +527,7 @@ mod test {
 	use super::super::test_data::*;
 
 	fn match_name(header: &[u8], expected_name: &[u8]) {
-		let (name, other_name) = patch_header(header).to_result().unwrap().unwrap();
+		let (name, other_name) = patch_header(header).unwrap().1.unwrap();
 		assert_eq!(name, other_name);
 		assert_eq!(name.as_slice(), expected_name);
 	}
@@ -544,25 +542,25 @@ mod test {
 
 	#[test]
 	fn test_unquote() {
-		assert_eq!(quoted_name(br#""Test""#), Done(&b""[..], (&b"Test"[..]).into()));
-		assert_eq!(quoted_name(br#""Te\\s\"t\n""#), Done(&b""[..], (&b"Te\\s\"t\n"[..]).into()));
-		assert_eq!(quoted_name(br#""Test\040""#), Done(&b""[..], (&b"Test "[..]).into()));
+		assert_eq!(quoted_name(br#""Test""#), Ok((&b""[..], (&b"Test"[..]).into())));
+		assert_eq!(quoted_name(br#""Te\\s\"t\n""#), Ok((&b""[..], (&b"Te\\s\"t\n"[..]).into())));
+		assert_eq!(quoted_name(br#""Test\040""#), Ok((&b""[..], (&b"Test "[..]).into())));
 	}
 
 	#[test]
 	fn test_hunk_header() {
 		let header = b"@@ -14,4 +8,4 @@ org.gradle.jvmargs=-Xmx1536m\n";
-		assert_eq!(hunk_header(header), Done(&b""[..], (14..18, 8..12)));
+		assert_eq!(hunk_header(header), Ok((&b""[..], (14..18, 8..12))));
 	}
 
 	#[test]
 	fn test_range() {
-		assert_eq!(range(b"14,5 "), Done(&b" "[..], 14..19));
-		assert_eq!(range(b"14 "), Done(&b" "[..], 14..15));
+		assert_eq!(range(b"14,5 "), Ok((&b" "[..], 14..19)));
+		assert_eq!(range(b"14 "), Ok((&b" "[..], 14..15)));
 	}
 
 	fn match_line(line: &[u8], old_file_lines_consumed: usize, new_file_lines_consumed: usize) {
-		assert_eq!(hunk_line(line), Done(&b""[..], ((old_file_lines_consumed, new_file_lines_consumed), line.len())));
+		assert_eq!(hunk_line(line), Ok((&b""[..], ((old_file_lines_consumed, new_file_lines_consumed), line.len()))));
 	}
 
 	#[test]
@@ -574,12 +572,12 @@ mod test {
 
 	#[test]
 	fn test_digits_usize() {
-		assert_eq!(digits_usize(b"14"), Done(&b""[..], 14));
+		assert_eq!(digits_usize(b"14data"), Ok((&b"data"[..], 14)));
 	}
 
 	#[test]
 	fn test_hunk() {
-		assert_eq!(hunk(&**PATCH_DATA_HUNK_2), Done(&b""[..], generate_hunk_2()));
+		assert_eq!(hunk(&**PATCH_DATA_HUNK_2), Ok((&b""[..], generate_hunk_2())));
 	}
 
 	#[test]

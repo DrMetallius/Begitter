@@ -8,7 +8,6 @@ use git::{self, Git};
 use change_set::{Commit, CombinedPatch, ChangeSetInfo};
 use patch_editor::parser::parse_combined_patch;
 use std::collections::HashMap;
-use model::main::Command::SetPatchMessage;
 use model::{Model, View};
 
 #[derive(Clone)]

@@ -7,7 +7,7 @@ use std::vec::Vec;
 
 use failure::Backtrace;
 
-use nom::ErrorKind;
+use nom::{Err, ErrorKind};
 
 use super::parsing_utils::file_name;
 
@@ -79,9 +79,12 @@ impl Git {
 	}
 
 	fn parse_name(name_data: &[u8]) -> Result<String> {
-		match file_name(name_data).to_result() {
-			Ok(data) => String::from_utf8(data).map_err(|err| err.into()),
-			Err(cause) => Err(cause.into())
+		match file_name(name_data) {
+			Ok((_, data)) => String::from_utf8(data).map_err(|err| err.into()),
+			Err(cause) => {
+				println!("{:?}", name_data);
+				Err(cause.into())
+			}
 		}
 	}
 
@@ -123,7 +126,7 @@ impl Git {
 				.collect::<Option<Vec<_>>>();
 		match heads_opt {
 			Some(heads) => Ok(heads),
-			None => Err(GitError::from(ErrorKind::Custom(0)))
+			None => Err(GitError::ParsingError(ErrorKind::Custom(0), Backtrace::new()))
 		}
 	}
 
@@ -236,7 +239,7 @@ pub enum GitError {
 	IoError(io::Error, Backtrace),
 	#[fail(display = "Error when parsing Unicode input: {}", _0)]
 	EncodingError(FromUtf8Error, Backtrace),
-	#[fail(display = "Error when parsing the patch data: {}", _0)]
+	#[fail(display = "Error when parsing the patch data: {:?}", _0)]
 	ParsingError(ErrorKind, Backtrace),
 	#[fail(display = "Git failure, status {:?}: {}", _0, _1)]
 	StatusError(Option<i32>, String, Backtrace)
@@ -263,9 +266,9 @@ impl From<FromUtf8Error> for GitError {
 	}
 }
 
-impl From<ErrorKind> for GitError {
-	fn from(error: ErrorKind) -> Self {
-		GitError::ParsingError(error, Backtrace::new())
+impl<I> From<Err<I>> for GitError {
+	fn from(error: Err<I>) -> Self {
+		GitError::ParsingError(error.into_error_kind(), Backtrace::new())
 	}
 }
 

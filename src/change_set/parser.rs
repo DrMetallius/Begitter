@@ -1,5 +1,5 @@
 use super::ChangeSetInfo;
-use nom::{IResult, IResult::Done, ErrorKind, FindSubstring, Slice, is_space, is_hex_digit, newline, rest};
+use nom::{Context, IResult, ErrorKind, is_space, is_hex_digit, newline, rest, Err};
 use failure;
 use change_set::{PersonAction, CommitInfo};
 use time::Timespec;
@@ -69,21 +69,21 @@ fn author_or_committer(input: &[u8]) -> IResult<&[u8], CommitProperty> {
 	let (rest, line) = try_parse!(input, take_until_and_consume1!(&b"\n"[..]));
 	let parts: Vec<&[u8]> = line.rsplitn(3, |&ch| is_space(ch)).collect();
 	if parts.len() < 3 {
-		return IResult::Error(ErrorKind::Custom(ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO));
+		return Err(Err::Error(Context::Code(input, ErrorKind::Custom(ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO))));
 	}
 
-	let (_, time) = try_parse!(parts[1], parse_to!(u64));
+	let (_, time) = try_parse!(parts[1], parse_to!(i64));
 	let (_, time_zone) = try_parse!(parts[0], parse_to!(i32));
 
 	let header_and_name: Vec<&[u8]> = parts[2].splitn(2, |&ch| is_space(ch)).collect();
 	if header_and_name.len() < 2 {
-		return IResult::Error(ErrorKind::Custom(ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO));
+		return Err(Err::Error(Context::Code(input, ErrorKind::Custom(ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO))));
 	}
 
 	match header_and_name[0] {
-		header if header == &b"author"[..] => Done(rest, CommitProperty::Author(header_and_name[1], time, time_zone)),
-		header if header == &b"committer"[..] => Done(rest, CommitProperty::Committer(header_and_name[1], time, time_zone)),
-		_ => IResult::Error(ErrorKind::Custom(ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO))
+		header if header == &b"author"[..] => Ok((rest, CommitProperty::Author(header_and_name[1], time, time_zone))),
+		header if header == &b"committer"[..] => Ok((rest, CommitProperty::Committer(header_and_name[1], time, time_zone))),
+		_ => Err(Err::Error(Context::Code(input, ErrorKind::Custom(ERROR_INVALID_COMMITTER_OR_AUTHOR_INFO))))
 	}
 }
 
@@ -100,7 +100,7 @@ committer Alexander Gazarov <drmetallius@gmail.com> 1523207822 +0300
 
 Это проверка
 ".as_bytes();
-		let result = parse_commit_info(data).to_result().unwrap();
+		let (_, result) = parse_commit_info(data).unwrap();
 		assert_eq!(result, CommitInfo {
 			change_set_info: ChangeSetInfo {
 				author_action: PersonAction {
