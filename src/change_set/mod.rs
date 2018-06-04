@@ -4,6 +4,7 @@ use time::{self, Timespec};
 use patch_editor::patch::Patch;
 use failure;
 use std::io::{Error, Write};
+use nom::ErrorKind;
 
 pub struct CombinedPatch {
 	pub info: ChangeSetInfo,
@@ -56,9 +57,18 @@ impl Default for PersonAction {
 	}
 }
 
+#[derive(Fail, Debug)]
+#[fail(display = "Error when parsing the commit data: {:?}", _0)]
+struct CommitParsingError(ErrorKind);
+
 impl Commit {
 	pub fn from_data(hash: String, commit_data: &[u8]) -> Result<Commit, failure::Error> {
-		let info = parser::parse_commit_info(commit_data).to_result()?;
+		let result = parser::parse_commit_info(commit_data);
+		let info = match result {
+			Ok((_, info)) => info,
+			Err(error) => return Err(CommitParsingError(error.into_error_kind()).into())
+		};
+
 		Ok(Commit {
 			hash,
 			info
