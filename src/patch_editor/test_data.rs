@@ -41,6 +41,8 @@ pub const PATCH_DATA_NO_NEW_LINES_HUNK_CONTENTS: &[u8] = br"-This is the second 
 \ No newline at end of file
 ";
 
+pub const REJECTS_HEADER: &[u8] = b"diff a/gradle.properties b/gradle.properties	(rejected hunks)\n";
+
 macro_rules! vec_from_slices {
 	($($x:expr), *) => {
 		{
@@ -126,6 +128,13 @@ lazy_static! {
 	};
 
 	pub static ref COMBINED_PATCH: Vec<&'static Patch> = vec![&*PATCH, &*PATCH_NO_NEW_LINES];
+
+	pub static ref REJECTS_DATA: Vec<u8> = vec_from_slices![
+				REJECTS_HEADER,
+				&**PATCH_DATA_HUNK_1,
+				&**PATCH_DATA_HUNK_2];
+
+	pub static ref REJECTED_HUNKS: Vec<Hunk> = vec![generate_hunk_1(), generate_hunk_2()];
 }
 
 pub fn generate_hunk_1<'a>() -> Hunk {
