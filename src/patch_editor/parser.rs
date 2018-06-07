@@ -1,4 +1,4 @@
-use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, space, Needed, IResult, ErrorKind, Err, types::CompleteByteSlice};
+use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, not_line_ending, space, Needed, IResult, ErrorKind, Err, newline};
 use std::ops::Range;
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
@@ -154,6 +154,20 @@ pub fn parse_combined_patch<'a>(input: &'a [u8]) -> Result<Vec<Patch>, ParseErro
 pub fn parse_patch(input: &[u8]) -> Result<Patch, ParseError> {
 	let (_, patch_parts) = patch(input)?;
 	patch_from_parts(patch_parts)
+}
+
+pub fn parse_rejects(input: &[u8]) -> Result<Vec<Hunk>, ParseError> {
+	let result = do_parse!(input,
+		not_line_ending >>
+		line_ending >>
+		hunks: many1!(complete!(hunk)) >>
+		(hunks)
+	);
+
+	match result {
+		Ok((_, hunks)) => Ok(hunks),
+		Err(err) => Err(err.into())
+	}
 }
 
 fn patch_from_parts<'a>(PatchParts { names, parts }: PatchParts<'a>) -> Result<Patch, ParseError> {
@@ -608,5 +622,11 @@ mod test {
 	fn test_parse_combined_patch() {
 		let result = parse_combined_patch(&*COMBINED_PATCH_DATA).unwrap();
 		assert_eq!(result.iter().collect::<Vec<&Patch>>(), *COMBINED_PATCH);
+	}
+
+	#[test]
+	fn test_parse_rejects() {
+		let result = parse_rejects(&*REJECTS_DATA).unwrap();
+		assert_eq!(result, *REJECTED_HUNKS);
 	}
 }

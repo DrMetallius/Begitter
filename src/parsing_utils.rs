@@ -1,5 +1,4 @@
-use nom::{Needed, not_line_ending, IResult, AtEof, types::CompleteByteSlice, AsBytes};
-use std::ops::Deref;
+use nom::{Needed, not_line_ending, types::CompleteByteSlice};
 
 macro_rules! parse_as_complete (
 	($i:expr, $submac:ident!( $($args:tt)* )) => (
