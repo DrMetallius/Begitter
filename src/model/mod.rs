@@ -5,6 +5,7 @@ use failure;
 use std::sync::Arc;
 
 pub mod main;
+pub mod rejects;
 
 #[derive(Clone)]
 struct Model<C: Send + 'static> {

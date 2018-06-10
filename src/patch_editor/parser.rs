@@ -1,4 +1,4 @@
-use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, not_line_ending, space, Needed, IResult, ErrorKind, Err, newline};
+use nom::{anychar, digit, is_space, is_hex_digit, is_oct_digit, line_ending, not_line_ending, space, Needed, IResult, ErrorKind, Err};
 use std::ops::Range;
 use std::borrow::Cow;
 use std::string::FromUtf8Error;
