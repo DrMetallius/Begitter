@@ -222,13 +222,6 @@ pub extern "system" fn edit_message_dialog_proc(hwnd_dlg: HWND, u_msg : UINT, w_
 	(if handled { TRUE } else { FALSE }) as INT_PTR
 }
 
-struct MessageData {
-	h_wnd: HWND,
-	message: UINT,
-	w_param: WPARAM,
-	l_param: LPARAM,
-}
-
 fn show_open_file_dialog(owner: HWND) -> Result<String, WinApiError> {
 	try_com!(CoCreateInstance(&GUID_FILE_DIALOG,
 		null_mut(),

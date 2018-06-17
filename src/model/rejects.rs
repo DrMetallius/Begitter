@@ -6,26 +6,34 @@ use std::iter::repeat;
 
 use failure;
 
-use model::{Model, View}
+use model::{Model, View};
 use patch_editor::patch::Hunk;
 use patch_editor::parser::parse_rejects;
+use std::fs::write;
+use std::fs::remove_file;
 
 #[derive(Clone)]
 enum Command {
 	ScanFiles,
-	UpdateChangesToFileAndSwitch(usize, Vec<u8>, usize),
-	AcceptHunk(usize, usize, Vec<u8>),
-	Reset(usize)
+	UpdateChangesToFile(Vec<u8>),
+	SwitchToFile(usize),
+	SwitchHunk(usize),
+	AcceptHunk(usize, usize, bool),
+	Reset(usize),
+	SaveAndQuit
 }
 
 struct State {
 	repo_dir_path: PathBuf,
 	rejected_files: Vec<RejectedFile>,
+	active_file: usize,
+	active_hunk: usize
 }
 
 #[derive(Clone)]
 struct RejectedFile {
 	path: PathBuf,
+	rejects_path: PathBuf,
 	hunks: Vec<(Arc<Hunk>, bool)>,
 	file_data: Vec<u8>,
 	updated_file_data: Arc<Vec<u8>>,
@@ -42,34 +50,54 @@ impl RejectsModel {
 			Ok(State {
 				repo_dir_path: repo_dir_owned.into(),
 				rejected_files: Vec::new(),
+				active_file: 0,
+				active_hunk: 0
 			})
 		}, RejectsModel::perform_command);
 
-		let model = RejectsModel {
+		RejectsModel {
 			base
-		};
-		model.scan_files();
-		model
+		}
 	}
 
 	fn perform_command<V: RejectsViewReceiver>(view: &V, ref mut state: &mut State, command: Command) -> Result<(), failure::Error> {
 		match command {
 			Command::ScanFiles => {
 				state.rejected_files = scan_directory(&state.repo_dir_path)?;
-				RejectsModel::update_view(view, state, 0, true);
+				state.active_file = 0;
+				state.active_hunk = 0;
+
+				RejectsModel::update_files_view(view, state);
+				RejectsModel::update_hunks_and_file_data_view(view, state);
+				RejectsModel::update_hunk_view(view, state);
 			}
-			Command::UpdateChangesToFileAndSwitch(file_pos, updated_file_data, new_file_pos) => {
-				state.rejected_files[file_pos].updated_file_data = Arc::new(updated_file_data);
-				RejectsModel::update_view(view, state, new_file_pos, false);
+			Command::UpdateChangesToFile(updated_file_data) => {
+				state.rejected_files[state.active_file].updated_file_data = Arc::new(updated_file_data);
 			}
-			Command::AcceptHunk(file_pos, hunk_pos, updated_file_data) => {
-				{
-					let mut file = &mut state.rejected_files[file_pos];
-					file.hunks[hunk_pos].1 = true;
-					file.updated_file_data = Arc::new(updated_file_data);
+			Command::SwitchToFile(new_file_pos) => {
+				if state.active_file != new_file_pos {
+					state.active_file = new_file_pos;
+
+					RejectsModel::update_hunks_and_file_data_view(view, state);
+					RejectsModel::update_hunk_view(view, state);
+				}
+			}
+			Command::SwitchHunk(hunk_pos) => {
+				state.active_hunk = hunk_pos;
+				RejectsModel::update_hunk_view(view, state);
+			}
+			Command::AcceptHunk(file_pos, hunk_pos, accepted) => {
+				state.rejected_files[file_pos].hunks[hunk_pos].1 = accepted;
+
+				if state.active_hunk < state.rejected_files[state.active_file].hunks.len() - 1 {
+					state.active_hunk += 1;
+				} else if state.active_file < state.rejected_files.len() - 1 {
+					state.active_file += 1;
 				}
 
-				RejectsModel::update_view(view, &state, file_pos, false);
+				RejectsModel::update_files_view(view, state);
+				RejectsModel::update_hunks_and_file_data_view(view, state);
+				RejectsModel::update_hunk_view(view, state);
 			}
 			Command::Reset(file_pos) => {
 				{
@@ -80,44 +108,74 @@ impl RejectsModel {
 					file.updated_file_data = Arc::new(file.file_data.clone());
 				}
 
-				RejectsModel::update_view(view, &state, file_pos, false);
+				state.active_file = file_pos;
+
+				RejectsModel::update_hunks_and_file_data_view(view, state);
+				RejectsModel::update_hunk_view(view, state);
+			}
+			Command::SaveAndQuit => {
+				for file in &state.rejected_files {
+					write(&file.path, &*file.updated_file_data)?;
+				}
+
+				for file in &state.rejected_files {
+					remove_file(&file.rejects_path)?;
+				}
+				view.finish();
 			}
 		}
 		Ok(())
 	}
 
-	fn update_view<V: RejectsViewReceiver>(view: &V, state: &State, active_file_pos: usize, show_files: bool) {
-		if show_files {
-			view.show_files(state.rejected_files.iter().map(|file| {
-				(file.path.to_string_lossy().into_owned(), file.hunks.iter().all(|&(_, merged)| merged))
-			}).collect());
-		}
-
-		let active_file = &state.rejected_files[active_file_pos];
-		view.show_file_hunks(active_file.hunks.clone());
-		view.show_file_data(active_file.updated_file_data.clone());
+	fn update_files_view<V: RejectsViewReceiver>(view: &V, state: &State) {
+		view.show_files(state.rejected_files.iter().map(|file| {
+			(file.path.to_string_lossy().into_owned(), file.hunks.iter().all(|&(_, merged)| merged))
+		}).collect());
 	}
 
-	fn scan_files(&self) {
+	fn update_hunks_and_file_data_view<V: RejectsViewReceiver>(view: &V, state: &State) {
+		let active_file = &state.rejected_files[state.active_file];
+		view.show_file_hunks(active_file.hunks.clone());
+		view.show_file_data(active_file.updated_file_data.clone(), state.active_file);
+	}
+
+	fn update_hunk_view<V: RejectsViewReceiver>(view: &V, state: &State) {
+		view.show_active_hunk(state.rejected_files[state.active_file].hunks[state.active_hunk].0.clone(), state.active_hunk);
+	}
+
+	pub fn scan_files(&self) {
 		self.base.worker_sink.send(Command::ScanFiles).unwrap();
 	}
 
-	pub fn update_changes_to_file_and_switch(&self, file_pos: usize, updated_file_data: Vec<u8>, new_file_pos: usize) {
-		self.base.worker_sink.send(Command::UpdateChangesToFileAndSwitch(file_pos, updated_file_data, new_file_pos)).unwrap();
+	pub fn update_changes_to_current_file(&self, updated_file_data: Vec<u8>) {
+		self.base.worker_sink.send(Command::UpdateChangesToFile(updated_file_data)).unwrap();
 	}
 
-	pub fn accept_hunk(&self, file_pos: usize, hunk_pos: usize, updated_file_data: Vec<u8>) {
-		self.base.worker_sink.send(Command::AcceptHunk(file_pos, hunk_pos, updated_file_data)).unwrap();
+	pub fn switch_to_file(&self, new_file_pos: usize) {
+		self.base.worker_sink.send(Command::SwitchToFile(new_file_pos)).unwrap();
+	}
+
+	pub fn switch_to_hunk(&self, hunk_pos: usize) {
+		self.base.worker_sink.send(Command::SwitchHunk(hunk_pos)).unwrap();
+	}
+
+	pub fn set_hunk_accepted(&self, file_pos: usize, hunk_pos: usize, accepted: bool) {
+		self.base.worker_sink.send(Command::AcceptHunk(file_pos, hunk_pos, accepted)).unwrap();
 	}
 
 	pub fn reset(&self, file_pos: usize) {
 		self.base.worker_sink.send(Command::Reset(file_pos)).unwrap();
 	}
+
+	pub fn save_and_quit(&self) {
+		self.base.worker_sink.send(Command::SaveAndQuit).unwrap();
+	}
 }
 
-fn scan_directory(path: impl AsRef<Path>) -> Result<Vec<RejectedFile>, failure::Error> {
+fn scan_directory(dir_path: impl AsRef<Path>) -> Result<Vec<RejectedFile>, failure::Error> {
 	let mut files = Vec::new();
-	for entry in read_dir(path)? {
+	let dir_path = PathBuf::from(dir_path.as_ref());
+	for entry in read_dir(&dir_path)? {
 		let path = entry?.path();
 		if path.is_dir() {
 			files.extend(scan_directory(path)?);
@@ -133,10 +191,25 @@ fn scan_directory(path: impl AsRef<Path>) -> Result<Vec<RejectedFile>, failure::
 				}
 			}
 
-			let file_data = read(&path)?;
-			let hunks = parse_rejects(&file_data)?;
+			let target_path = {
+				let stem = match path.file_stem() {
+					Some(stem) => stem,
+					None => continue
+				};
+				dir_path.join(stem)
+			};
+
+			let file_data = if target_path.exists() {
+				read(&target_path)?
+			} else {
+				Vec::new()
+			};
+
+			let rejects_data = read(&path)?;
+			let hunks = parse_rejects(&rejects_data)?;
 			let rejected_file = RejectedFile {
-				path,
+				path: target_path,
+				rejects_path: path,
 				hunks: hunks
 						.into_iter()
 						.map(|hunk| Arc::new(hunk)).into_iter().zip(repeat(false))
@@ -153,5 +226,7 @@ fn scan_directory(path: impl AsRef<Path>) -> Result<Vec<RejectedFile>, failure::
 pub trait RejectsViewReceiver: View {
 	fn show_files(&self, files: Vec<(String, bool)>);
 	fn show_file_hunks(&self, hunks: Vec<(Arc<Hunk>, bool)>);
-	fn show_file_data(&self, data: Arc<Vec<u8>>);
+	fn show_file_data(&self, data: Arc<Vec<u8>>, file_pos: usize);
+	fn show_active_hunk(&self, hunk: Arc<Hunk>, hunk_pos: usize);
+	fn finish(&self);
 }

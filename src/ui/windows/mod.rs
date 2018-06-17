@@ -4,3 +4,4 @@ mod text;
 mod dpi;
 mod utils;
 pub mod main;
+mod rejects;

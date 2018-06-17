@@ -48,8 +48,6 @@ impl MainModel {
 	}
 
 	fn perform_command<V: MainViewReceiver>(view: &V, ref mut state: &mut State, command: Command) -> Result<(), failure::Error> {
-		let State { ref mut git, ref mut combined_patches } = state;
-
 		fn show_combined_patches<V: MainViewReceiver>(view: &V, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
 			view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
 		}
@@ -61,7 +59,7 @@ impl MainModel {
 			Command::ImportCommits(commits) => {
 				let mut new_combined_patches = Vec::<CombinedPatch>::new();
 				for commit in commits {
-					let combined_patch_data = git.diff_tree(&commit.hash)?;
+					let combined_patch_data = state.git.diff_tree(&commit.hash)?;
 					let patches = parse_combined_patch(combined_patch_data.as_bytes())?;
 					let combined_patch = CombinedPatch {
 						info: commit.info.change_set_info,
@@ -70,12 +68,12 @@ impl MainModel {
 					new_combined_patches.push(combined_patch);
 				}
 
-				combined_patches.extend(new_combined_patches);
-				show_combined_patches(view, combined_patches)?;
+				state.combined_patches.extend(new_combined_patches);
+				show_combined_patches(view, &state.combined_patches)?;
 			}
 			Command::SetPatchMessage(patch_index, message) => {
-				combined_patches[patch_index].info.message = message;
-				show_combined_patches(view, combined_patches)?;
+				state.combined_patches[patch_index].info.message = message;
+				show_combined_patches(view, &state.combined_patches)?;
 			}
 			Command::MovePatch(source_position, insertion_position) => {
 				if source_position != insertion_position {
@@ -84,32 +82,32 @@ impl MainModel {
 						adjusted_insertion_position -= 1;
 					}
 
-					let patch = combined_patches.remove(source_position);
-					combined_patches.insert(adjusted_insertion_position, patch);
-					show_combined_patches(view, combined_patches)?;
+					let patch = state.combined_patches.remove(source_position);
+					state.combined_patches.insert(adjusted_insertion_position, patch);
+					show_combined_patches(view, &state.combined_patches)?;
 				}
 			}
 			Command::DeletePatch(patch_index) => {
-				combined_patches.remove(patch_index);
-				show_combined_patches(view, combined_patches)?;
+				state.combined_patches.remove(patch_index);
+				show_combined_patches(view, &state.combined_patches)?;
 			}
 			Command::ApplyCommits(first_commit_to_replace) => {
-				let active_branch = git.symbolic_ref("HEAD")?;
+				let active_branch = state.git.symbolic_ref("HEAD")?;
 				// TODO: this is the scenario when we are in a clean state, HEAD points to the changed branch. Consider other states.
 				let mut target_commit = first_commit_to_replace.info.parent;
 				let mut applied_patches = 0usize;
-				for patch in combined_patches.iter().rev() {
-					git.read_tree(target_commit.clone())?;
+				for patch in state.combined_patches.iter().rev() {
+					state.git.read_tree(target_commit.clone())?;
 
 					let mut patch_data: Vec<u8> = Vec::new();
 					patch.write(&mut patch_data)?;
 
-					let result = git.apply(&*patch_data, false);
+					let result = state.git.apply(&*patch_data, false);
 					match result {
 						Err(ref err) if err.to_status() == Some(1) => {
-							git.checkout_index()?; // TODO: can the index have a half-applied patch at this point?
+							state.git.checkout_index()?; // TODO: can the index have a half-applied patch at this point?
 
-							let result = git.apply(&*patch_data, true);
+							let result = state.git.apply(&*patch_data, true);
 							match result {
 								Err(ref err) if err.to_status() == Some(1) => (),
 								Err(err) => return Err(err.into()),
@@ -117,7 +115,7 @@ impl MainModel {
 									Backtrace::new()).into())
 							}
 
-							let conflicts = git.status_conflicts()?;
+							let conflicts = state.git.status_conflicts()?;
 							// TODO: show conflicts, remove applied patches
 							for file in conflicts {
 								println!("{}", file);
@@ -128,26 +126,26 @@ impl MainModel {
 						Ok(_) => ()
 					};
 
-					let tree = git.write_tree()?;
-					let commit = git.commit_tree(&tree, target_commit.as_ref(), &patch.info.message)?;
-					git.update_ref("HEAD", &commit)?;
+					let tree = state.git.write_tree()?;
+					let commit = state.git.commit_tree(&tree, target_commit.as_ref(), &patch.info.message)?;
+					state.git.update_ref("HEAD", &commit)?;
 
 					target_commit = Some(commit);
 					applied_patches += 1;
 				}
 
-				let patches_left = combined_patches.len() - applied_patches;
-				combined_patches.truncate(patches_left);
+				let patches_left = state.combined_patches.len() - applied_patches;
+				state.combined_patches.truncate(patches_left);
 
 				if patches_left == 0 {
-					git.update_ref(&active_branch, &target_commit.unwrap())?;
-					git.symbolic_ref_update("HEAD", &active_branch)?;
+					state.git.update_ref(&active_branch, &target_commit.unwrap())?;
+					state.git.symbolic_ref_update("HEAD", &active_branch)?;
 				}
 
 				MainModel::get_branches_and_commits(view, state)?;
 			}
 			Command::SwitchToBranch(ref_name) => {
-				git.symbolic_ref_update("HEAD", &ref_name)?;
+				state.git.symbolic_ref_update("HEAD", &ref_name)?;
 				MainModel::get_branches_and_commits(view, state)?;
 			}
 		}
