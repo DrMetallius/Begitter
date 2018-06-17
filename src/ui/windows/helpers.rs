@@ -7,7 +7,7 @@ use std::result::Result::Ok;
 
 use winapi::Interface;
 use winapi::shared::ntdef::PWSTR;
-use winapi::shared::minwindef::{HINSTANCE, BYTE};
+use winapi::shared::minwindef::{HINSTANCE, BYTE, UINT, WPARAM, LPARAM};
 use winapi::shared::windef::{HGDIOBJ, HMENU, HDC, HWND, HBRUSH};
 use winapi::um::combaseapi::CoTaskMemFree;
 use winapi::um::unknwnbase::IUnknown;
@@ -224,6 +224,13 @@ impl From<isize> for WinApiError {
 	fn from(code: isize) -> WinApiError {
 		WinApiError(code as u64, Backtrace::new())
 	}
+}
+
+pub struct MessageData {
+	pub h_wnd: HWND,
+	pub message: UINT,
+	pub w_param: WPARAM,
+	pub l_param: LPARAM,
 }
 
 pub struct MenuHandle {

@@ -24,6 +24,9 @@ pub const STRING_MAIN_PATCHES_COLUMN_AUTHOR: UINT = 10;
 pub const STRING_MAIN_PATCHES_COLUMN_DATE: UINT = 11;
 pub const STRING_MAIN_PATCHES_COLUMNS: Range<UINT> = STRING_MAIN_PATCHES_COLUMN_MESSAGE..STRING_MAIN_PATCHES_COLUMN_DATE + 1;
 
+pub const STRING_REJECTS_ACCEPT_HUNK: UINT = 12;
+pub const STRING_REJECTS_UNACCEPT_HUNK: UINT = 13;
+
 pub fn load_string(id: UINT) -> Result<Vec<u16>, WinApiError> {
 	let mut string_pointer = null_mut::<u16>();
 	let string_length = try_call!(LoadStringW(null_mut(), id, &mut string_pointer as *mut _ as *mut u16, 0), 0);
