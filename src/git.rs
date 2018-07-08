@@ -236,6 +236,11 @@ impl Git {
 
 		Ok(commit.trim().into())
 	}
+
+	pub fn merge_tool(&self) -> Result<()> {
+		self.run_command(&["mergetool", "--no-prompt"])?;
+		Ok(())
+	}
 }
 
 #[derive(Fail, Debug)]

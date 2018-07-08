@@ -34,7 +34,8 @@ use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
 use begitter::model::View;
 use ui::windows::text::{load_string, STRING_MAIN_PATCHES_COLUMNS, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES,
-	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS, format_time, STRING_MAIN_ABORT, STRING_MAIN_RESOLVE_REJECTS};
+	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS, format_time, STRING_MAIN_ABORT, STRING_MAIN_RESOLVE_REJECTS
+	STRING_MAIN_RESOLVE_CONFLICTS};
 use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view, close_dialog,
 	get_dialog_field_text, get_window_client_area, set_dialog_field_text, show_context_menu};
 use ui::windows::dpi::GetDpiForWindow;
@@ -277,13 +278,25 @@ impl MainViewReceiver for MainViewRelay {
 	fn resolve_rejects(&self) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::ResolveRejects).map_err(|err| err.into())
 	}
+
+	fn notify_conflicts(&self) -> Result<(), failure::Error> {
+		self.post_on_main_thread(MainViewMessage::NotifyConflicts).map_err(|err| err.into())
+	}
 }
 
 enum MainViewMessage {
 	Branches(Vec<BranchItem>),
 	Commits(Vec<Commit>),
 	CombinedPatches(Vec<ChangeSetInfo>),
-	ResolveRejects
+	ResolveRejects,
+	NotifyConflicts
+}
+
+#[derive(PartialEq, Copy, Clone)]
+enum ContinueButtonState {
+	Unavailable,
+	ResolveRejects,
+	ResolveConflicts
 }
 
 struct MainView {
@@ -302,6 +315,7 @@ struct MainView {
 	commit_strings: Vec<Vec<WideString>>,
 	combined_patches: Vec<ChangeSetInfo>,
 	combined_patch_strings: Vec<Vec<WideString>>,
+	continue_button_state: ContinueButtonState,
 
 	combined_patches_list_view_drag_tracker: ListViewDragTracker
 }
@@ -353,7 +367,6 @@ impl MainView {
 
 		let continue_button = try_get!(CreateWindowExW(0, button_class.as_ptr(), null_mut(), WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, main_window as HWND,
 				0 as HMENU, 0 as HINSTANCE, null_mut()));
-		try_call!(SetWindowTextW(continue_button, load_string(STRING_MAIN_RESOLVE_REJECTS)?.as_ptr()), 0);
 
 		let abort_button = try_get!(CreateWindowExW(0, button_class.as_ptr(), null_mut(), WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, main_window as HWND,
 				0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -380,6 +393,7 @@ impl MainView {
 			commits: Vec::new(),
 			commit_strings: Vec::new(),
 			combined_patch_strings: Vec::new(),
+			continue_button_state: ContinueButtonState::Unavailable,
 			combined_patches_list_view_drag_tracker: ListViewDragTracker::new(combined_patches_list_view)
 		};
 
@@ -400,10 +414,7 @@ impl MainView {
 			*Box::from_raw(message_data.l_param as *mut _)
 		};
 
-		unsafe {
-			ShowWindow(self.continue_button, SW_HIDE);
-			ShowWindow(self.abort_button, SW_HIDE);
-		}
+		self.set_continue_button_state(ContinueButtonState::Unavailable)?;
 
 		match arguments {
 			MainViewMessage::Branches(branches) => {
@@ -432,7 +443,8 @@ impl MainView {
 								format_time(patch.author_action.time).into()]
 						})?;
 			}
-			MainViewMessage::ResolveRejects => self.resolve_rejects()
+			MainViewMessage::ResolveRejects => self.resolve_rejects()?,
+			MainViewMessage::NotifyConflicts => self.set_continue_button_state(ContinueButtonState::ResolveConflicts)?
 		}
 
 		Ok(())
@@ -495,18 +507,46 @@ impl MainView {
 		Ok(())
 	}
 
-	fn resolve_rejects(&self) {
-		let model = self.model.as_ref().unwrap();
-		let raw_result = RejectsView::show(self.main_window, model.repo_dir().to_path_buf());
-		match *unsafe { Box::from_raw(raw_result as *mut Option<Vec<String>>) } {
-			Some(updated_files) => model.continue_application(updated_files),
-			None => {
-				unsafe {
-					ShowWindow(self.continue_button, SW_SHOW);
-					ShowWindow(self.abort_button, SW_SHOW);
-				}
-			}
+	fn set_continue_button_state(&mut self, state: ContinueButtonState) -> Result<(), WinApiError> {
+		self.continue_button_state = state;
+
+		let text = match state {
+			ContinueButtonState::Unavailable => None,
+			ContinueButtonState::ResolveConflicts => Some(STRING_MAIN_RESOLVE_CONFLICTS),
+			ContinueButtonState::ResolveRejects => Some(STRING_MAIN_RESOLVE_REJECTS)
+		};
+
+		if let Some(text) = text {
+			try_call!(SetWindowTextW(self.continue_button, load_string(text)?.as_ptr()), 0);
 		}
+
+		let available = state != ContinueButtonState::Unavailable;
+		unsafe {
+			ShowWindow(self.continue_button, if available { SW_SHOW } else { SW_HIDE });
+			ShowWindow(self.abort_button, if available { SW_SHOW } else { SW_HIDE });
+		};
+
+		Ok(())
+	}
+
+	fn resolve_rejects(&mut self) -> Result<(), WinApiError> {
+		let resolved = {
+			let model = self.model.as_ref().unwrap();
+			let raw_result = RejectsView::show(self.main_window, model.repo_dir().to_path_buf());
+			match *unsafe { Box::from_raw(raw_result as *mut Option<Vec<String>>) } {
+				Some(updated_files) => {
+					model.continue_application(updated_files);
+					true
+				},
+				None => false
+			}
+		};
+
+		if !resolved {
+			self.set_continue_button_state(ContinueButtonState::ResolveRejects)?;
+		}
+
+		Ok(())
 	}
 
 	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
@@ -535,7 +575,12 @@ impl MainView {
 						_ => false
 					}
 				} else if message_data.l_param as HWND == self.continue_button {
-					self.resolve_rejects();
+					match self.continue_button_state {
+						ContinueButtonState::Unavailable => panic!("The continue button is unavailable, but received a command from it"),
+						ContinueButtonState::ResolveConflicts => self.model.as_ref().unwrap().resolve_conflicts(),
+						ContinueButtonState::ResolveRejects => self.resolve_rejects()?
+					}
+
 					true
 				} else if message_data.l_param as HWND == self.abort_button {
 					self.model.as_ref().unwrap().abort();
