@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::sync::Arc;
 use std::path::{PathBuf, Path};
 use std::collections::HashMap;
@@ -19,6 +19,7 @@ enum Command {
 	DeletePatch(usize),
 	ApplyCommits(Commit),
 	ContinueApplication(Vec<String>),
+	ResolveConflicts,
 	AbortApplication,
 	SwitchToBranch(String),
 }
@@ -27,19 +28,20 @@ enum Command {
 enum PatchApplicationState {
 	Applied,
 	Conflicts(Vec<String>),
-	Rejects
+	Rejects,
 }
 
 struct State {
 	git: Git,
 	combined_patches: Vec<CombinedPatch>,
-	branch_under_update: Option<String>
+	branch_under_update: Option<String>,
+	conflicts: Vec<String>,
 }
 
 #[derive(Clone)]
 pub struct MainModel {
 	base: Model<Command>,
-	repo_dir: PathBuf
+	repo_dir: PathBuf,
 }
 
 impl MainModel {
@@ -48,13 +50,14 @@ impl MainModel {
 			Ok(State {
 				git: Git::new(repo_dir_owned),
 				combined_patches: Vec::new(),
-				branch_under_update: None
+				branch_under_update: None,
+				conflicts: Vec::new(),
 			})
 		}, MainModel::perform_command);
 
 		let model = MainModel {
 			base,
-			repo_dir: repo_dir.as_ref().to_path_buf()
+			repo_dir: repo_dir.as_ref().to_path_buf(),
 		};
 		model.base.send(Command::GetBranches);
 		model
@@ -111,17 +114,13 @@ impl MainModel {
 
 				MainModel::apply_existing_patches(view, state, &active_branch, target_commit, false)?
 			}
-			Command::ContinueApplication(updated_files) => {
-				let branch = state.branch_under_update.as_ref().unwrap().clone();
-				let target_commit = Some(state.git.show_ref("HEAD")?);
-
-				state.git.update_index(&updated_files)?;
-				MainModel::apply_existing_patches(view, state, &branch, target_commit, true)?
-			}
+			Command::ContinueApplication(updated_files) => MainModel::update_files_and_continue_application(view, state, updated_files)?,
+			Command::ResolveConflicts => MainModel::resolve_conflicts_and_continue(view, state)?,
 			Command::AbortApplication => {
 				if let Some(branch) = state.branch_under_update.clone() {
 					state.git.symbolic_ref_update("HEAD", &branch)?;
 					state.branch_under_update = None;
+					state.conflicts.clear();
 					state.combined_patches.clear();
 					MainModel::get_branches_and_commits(view, state)?;
 				}
@@ -129,13 +128,14 @@ impl MainModel {
 			Command::SwitchToBranch(ref_name) => {
 				state.git.symbolic_ref_update("HEAD", &ref_name)?;
 				state.branch_under_update = None;
+				state.conflicts.clear();
 				MainModel::get_branches_and_commits(view, state)?;
 			}
 		}
 		Ok(())
 	}
 
-	fn get_branches_and_commits(view: &MainViewReceiver, State { ref mut git, ref mut combined_patches, .. }: &mut State) -> Result<(), failure::Error> {
+	fn get_branches_and_commits(view: &MainViewReceiver, State { ref mut git, ref mut combined_patches, .. }: &mut State) -> Result<(), failure::Error> { // TODO: am I using trait objects here? Don't.
 		let refs = git.show_refs_heads()?;
 		let unprocessed_parts_to_refs = refs
 				.iter()
@@ -200,7 +200,12 @@ impl MainModel {
 
 		match last_patch_application_state {
 			PatchApplicationState::Applied => MainModel::get_branches_and_commits(view, state)?,
-			PatchApplicationState::Conflicts(_) => (), // TODO: do something with them here or in the view, then do git.update_index() for these files
+			PatchApplicationState::Conflicts(conflicts) => {
+				state.conflicts.clear();
+				state.conflicts.extend(conflicts.into_iter());
+
+				MainModel::resolve_conflicts_and_continue(view, state)?
+			}
 			PatchApplicationState::Rejects => view.resolve_rejects()?
 		}
 
@@ -228,15 +233,41 @@ impl MainModel {
 			}
 		}
 
-		apply_and_check(git, patch_data,true)?;
+		apply_and_check(git, patch_data, true)?;
 
 		let conflicts = git.status_conflicts()?;
 		if conflicts.is_empty() { // 3-way merge didn't work, let's try to edit rejects
-			apply_and_check(git, patch_data,false)?;
+			apply_and_check(git, patch_data, false)?;
 			Ok(PatchApplicationState::Rejects)
 		} else {
 			Ok(PatchApplicationState::Conflicts(conflicts))
 		}
+	}
+
+	fn resolve_conflicts_and_continue(view: &MainViewReceiver, state: &mut State) -> Result<(), failure::Error> {
+		let result = state.git.merge_tool();
+		match result {
+			Ok(_) => {
+				let conflicts = state.conflicts.clone();
+				state.conflicts.clear();
+				MainModel::update_files_and_continue_application(view, state, conflicts)?;
+			},
+			// TODO: do something with them here or in the view, then do git.update_index() for these files
+			Err(_) => view.notify_conflicts()?
+		}
+
+		Ok(())
+	}
+
+	fn update_files_and_continue_application<I, S>(view: &MainViewReceiver, state: &mut State, updated_files: I) -> Result<(), failure::Error>
+		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
+		let branch = state.branch_under_update.as_ref().unwrap().clone();
+		let target_commit = Some(state.git.show_ref("HEAD")?);
+
+		state.git.update_index(updated_files)?;
+		MainModel::apply_existing_patches(view, state, &branch, target_commit, true)?;
+
+		Ok(())
 	}
 
 	pub fn import_commits(&self, commits: Vec<Commit>) {
@@ -263,6 +294,10 @@ impl MainModel {
 		self.base.send(Command::ContinueApplication(updated_files));
 	}
 
+	pub fn resolve_conflicts(&self) {
+		self.base.send(Command::ResolveConflicts);
+	}
+
 	pub fn abort(&self) {
 		self.base.send(Command::AbortApplication);
 	}
@@ -287,6 +322,7 @@ pub trait MainViewReceiver: View {
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error>;
 	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error>;
 	fn resolve_rejects(&self) -> Result<(), failure::Error>;
+	fn notify_conflicts(&self) -> Result<(), failure::Error>;
 }
 
 pub enum BranchItem {
