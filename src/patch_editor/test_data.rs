@@ -83,12 +83,12 @@ lazy_static! {
 				old_properties: FileProperties {
 					name: "gradle.properties".into(),
 					mode: "100644".into(),
-					index: "aac7c9b".into(),
+					index: Some("aac7c9b".into()),
 				},
 				new_properties: FileProperties {
 					name: "gradle.properties".into(),
 					mode: "100644".into(),
-					index: "f33a6d7".into(),
+					index: Some("f33a6d7".into()),
 				},
 			},
 			hunks: vec![generate_hunk_1(), generate_hunk_2()],
@@ -101,7 +101,7 @@ lazy_static! {
 				new_properties: FileProperties {
 					name: " b/Новый текстовый документ.txt".into(),
 					mode: "100644".into(),
-					index: "e69de29".into(),
+					index: Some("e69de29".into()),
 				}
 			},
 			hunks: Vec::new(),
@@ -115,12 +115,12 @@ lazy_static! {
 				old_properties: FileProperties {
 					name: "Test file 2.txt".into(),
 					mode: "100644".into(),
-					index: "60c340c".into(),
+					index: Some("60c340c".into()),
 				},
 				new_properties: FileProperties {
 					name: "Test file 2.txt".into(),
 					mode: "100644".into(),
-					index: "ec6c4de".into(),
+					index: Some("ec6c4de".into()),
 				},
 			},
 			hunks: vec![generate_hunk_no_new_lines()],
