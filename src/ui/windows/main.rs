@@ -20,7 +20,7 @@ use winapi::um::winuser::{self, AdjustWindowRectExForDpi, GetWindowLongW, Create
 	IDC_ARROW, IDI_APPLICATION, GWL_STYLE, GWL_EXSTYLE, SWP_NOMOVE, DialogBoxParamW, LoadAcceleratorsW, LoadCursorW, LoadIconW, MSG, PostQuitMessage,
 	PostMessageW, RegisterClassW, ShowWindow, SetWindowPos, SW_SHOWDEFAULT, TranslateAcceleratorW, TranslateMessage, TRACKMOUSEEVENT, WM_APP,
 	WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILD, WS_BORDER, WS_TABSTOP, WS_VSCROLL, WS_CLIPCHILDREN, SetWindowTextW, LPNMHDR, WNDPROC,
-	FillRect, GWLP_WNDPROC, InvalidateRect, MapWindowPoints, MK_LBUTTON, SetWindowLongPtrW, TME_LEAVE,
+	FillRect, GWLP_WNDPROC, InvalidateRect, MapWindowPoints, MK_LBUTTON, SetWindowLongPtrW, TME_LEAVE, BS_PUSHBUTTON, SW_HIDE, SW_SHOW,
 	TrackMouseEvent};
 use winapi::um::commctrl::{self, WC_TREEVIEW, WC_STATIC, TVS_HASLINES, TVM_INSERTITEMW, TVINSERTSTRUCTW, TVI_SORT, TVIF_TEXT,
 	TVM_DELETEITEM, TVI_ROOT, TVIF_CHILDREN, HTREEITEM, TVIF_STATE, TVIS_BOLD, TVS_HASBUTTONS, TVS_LINESATROOT, TVIS_EXPANDED, TVM_GETNEXTITEM,
@@ -32,12 +32,13 @@ use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 use super::helpers::*;
 use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
 use begitter::change_set::{Commit, ChangeSetInfo};
+use begitter::model::View;
 use ui::windows::text::{load_string, STRING_MAIN_PATCHES_COLUMNS, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES,
-	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS, format_time};
+	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS, format_time, STRING_MAIN_ABORT, STRING_MAIN_RESOLVE_REJECTS};
 use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view, close_dialog,
 	get_dialog_field_text, get_window_client_area, set_dialog_field_text, show_context_menu};
 use ui::windows::dpi::GetDpiForWindow;
-use begitter::model::View;
+use ui::windows::rejects::RejectsView;
 
 const MAIN_CLASS: &str = "main";
 
@@ -272,12 +273,17 @@ impl MainViewReceiver for MainViewRelay {
 	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::CombinedPatches(combined_patches)).map_err(|err| err.into())
 	}
+
+	fn resolve_rejects(&self) -> Result<(), failure::Error> {
+		self.post_on_main_thread(MainViewMessage::ResolveRejects).map_err(|err| err.into())
+	}
 }
 
 enum MainViewMessage {
 	Branches(Vec<BranchItem>),
 	Commits(Vec<Commit>),
 	CombinedPatches(Vec<ChangeSetInfo>),
+	ResolveRejects
 }
 
 struct MainView {
@@ -288,6 +294,8 @@ struct MainView {
 	branches_tree_view: HWND,
 	commits_list_view: HWND,
 	combined_patches_list_view: HWND,
+	continue_button: HWND,
+	abort_button: HWND,
 
 	branches: Vec<BranchItem>,
 	commits: Vec<Commit>,
@@ -299,17 +307,23 @@ struct MainView {
 }
 
 impl MainView {
-	const LABEL_WIDTH: c_int = 100;
+	const LABEL_WIDTH: c_int = 50;
+	const LABEL_HEIGHT: c_int = 25;
+
+	const BUTTON_WIDTH: c_int = 100;
+	const BUTTON_HEIGHT: c_int = 25;
+
 	const EDGE_MARGIN: c_int = 7;
 	const BRANCHES_WIDTH: c_int = 200;
 	const SEPARATOR_WIDTH: c_int = 5;
+
 	const COMMIT_AND_PATCH_HOR_POSITION: c_int = MainView::EDGE_MARGIN + MainView::BRANCHES_WIDTH + MainView::SEPARATOR_WIDTH;
-	const LABEL_HEIGHT: c_int = 25;
 
 	fn initialize(main_window: HWND) -> Result<MainView, WinApiError> {
 		let static_class = to_wstring(WC_STATIC);
 		let tree_view_class = to_wstring(WC_TREEVIEW);
 		let list_view_class = to_wstring(WC_LISTVIEW);
+		let button_class = to_wstring("Button");
 
 		let branches_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD,
 				MainView::EDGE_MARGIN, MainView::EDGE_MARGIN, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -337,6 +351,14 @@ impl MainView {
 				WS_CHILD | WS_VSCROLL, 0, 0, 0, 0, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		insert_columns_into_list_view(commits_list_view, STRING_MAIN_COMMITS_COLUMNS)?;
 
+		let continue_button = try_get!(CreateWindowExW(0, button_class.as_ptr(), null_mut(), WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, main_window as HWND,
+				0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(continue_button, load_string(STRING_MAIN_RESOLVE_REJECTS)?.as_ptr()), 0);
+
+		let abort_button = try_get!(CreateWindowExW(0, button_class.as_ptr(), null_mut(), WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, main_window as HWND,
+				0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(abort_button, load_string(STRING_MAIN_ABORT)?.as_ptr()), 0);
+
 		let default_proc = try_call!(SetWindowLongPtrW(combined_patches_list_view, GWLP_WNDPROC, combined_patch_list_view_proc as LONG_PTR), 0);
 		unsafe {
 			DEFAULT_COMBINED_PATCHES_LIST_VIEW_PROC = Some(mem::transmute(default_proc));
@@ -351,6 +373,8 @@ impl MainView {
 			branches_tree_view,
 			combined_patches_list_view,
 			commits_list_view,
+			continue_button,
+			abort_button,
 			branches: Vec::new(),
 			combined_patches: Vec::new(),
 			commits: Vec::new(),
@@ -375,6 +399,11 @@ impl MainView {
 		let arguments = unsafe {
 			*Box::from_raw(message_data.l_param as *mut _)
 		};
+
+		unsafe {
+			ShowWindow(self.continue_button, SW_HIDE);
+			ShowWindow(self.abort_button, SW_HIDE);
+		}
 
 		match arguments {
 			MainViewMessage::Branches(branches) => {
@@ -403,6 +432,7 @@ impl MainView {
 								format_time(patch.author_action.time).into()]
 						})?;
 			}
+			MainViewMessage::ResolveRejects => self.resolve_rejects()
 		}
 
 		Ok(())
@@ -465,6 +495,20 @@ impl MainView {
 		Ok(())
 	}
 
+	fn resolve_rejects(&self) {
+		let model = self.model.as_ref().unwrap();
+		let raw_result = RejectsView::show(self.main_window, model.repo_dir().to_path_buf());
+		match *unsafe { Box::from_raw(raw_result as *mut Option<Vec<String>>) } {
+			Some(updated_files) => model.continue_application(updated_files),
+			None => {
+				unsafe {
+					ShowWindow(self.continue_button, SW_SHOW);
+					ShowWindow(self.abort_button, SW_SHOW);
+				}
+			}
+		}
+	}
+
 	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
 		let handled = self.combined_patches_list_view_drag_tracker.pre_message_processing(message_data)?;
 		if handled {
@@ -480,14 +524,24 @@ impl MainView {
 				true
 			}
 			winuser::WM_COMMAND => {
-				match LOWORD(message_data.w_param as DWORD) {
-					ID_MENU_OPEN => {
-						if let Ok(dir) = show_open_file_dialog(self.main_window) {
-							self.set_model(MainModel::new(unsafe { MAIN_VIEW_RELAY.as_mut() }.unwrap().clone(), dir));
+				if message_data.l_param == 0 {
+					match LOWORD(message_data.w_param as DWORD) {
+						ID_MENU_OPEN => {
+							if let Ok(dir) = show_open_file_dialog(self.main_window) {
+								self.set_model(MainModel::new(unsafe { MAIN_VIEW_RELAY.as_mut() }.unwrap().clone(), dir));
+							}
+							true
 						}
-						true
+						_ => false
 					}
-					_ => false
+				} else if message_data.l_param as HWND == self.continue_button {
+					self.resolve_rejects();
+					true
+				} else if message_data.l_param as HWND == self.abort_button {
+					self.model.as_ref().unwrap().abort();
+					true
+				} else {
+					false
 				}
 			}
 			winuser::WM_NOTIFY => {
@@ -638,6 +692,10 @@ impl MainView {
 				client_area_height - commits_vert_pos - MainView::EDGE_MARGIN, 0), 0);
 		try_call!(SetWindowPos(self.commits_label, null_mut(), MainView::COMMIT_AND_PATCH_HOR_POSITION, commits_vert_pos - MainView::LABEL_HEIGHT,
 				MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT, 0), 0);
+		try_call!(SetWindowPos(self.continue_button, null_mut(), client_area_width - MainView::EDGE_MARGIN - MainView::BUTTON_WIDTH,
+				commits_vert_pos - MainView::BUTTON_HEIGHT - 4, MainView::BUTTON_WIDTH, MainView::BUTTON_HEIGHT, 0), 0);
+		try_call!(SetWindowPos(self.abort_button, null_mut(), client_area_width - MainView::EDGE_MARGIN - MainView::SEPARATOR_WIDTH -
+				MainView::BUTTON_WIDTH * 2, commits_vert_pos - MainView::BUTTON_HEIGHT - 4, MainView::BUTTON_WIDTH, MainView::BUTTON_HEIGHT, 0), 0);
 		Ok(())
 	}
 }

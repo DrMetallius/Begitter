@@ -5,6 +5,7 @@ use std::fs::{read_dir, read};
 use std::iter::repeat;
 
 use failure;
+use pathdiff::diff_paths;
 
 use model::{Model, View};
 use patch_editor::patch::Hunk;
@@ -129,7 +130,9 @@ impl RejectsModel {
 
 	fn update_files_view<V: RejectsViewReceiver>(view: &V, state: &State) {
 		view.show_files(state.rejected_files.iter().map(|file| {
-			(file.path.to_string_lossy().into_owned(), file.hunks.iter().all(|&(_, merged)| merged))
+			let relative_path = diff_paths(&file.path, &state.repo_dir_path).unwrap().to_string_lossy().into_owned();
+			let accepted = file.hunks.iter().all(|&(_, accepted)| accepted);
+			(relative_path, accepted)
 		}).collect());
 	}
 

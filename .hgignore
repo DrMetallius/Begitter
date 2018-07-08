@@ -1,5 +1,4 @@
-
 ^target/
-glob:*.rs.bk
 ^\.vscode/
 ^\.idea/
+.*\.iml$
