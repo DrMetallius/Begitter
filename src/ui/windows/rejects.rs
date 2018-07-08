@@ -1,52 +1,22 @@
-use begitter::model::rejects::RejectsModel;
-use begitter::model::rejects::RejectsViewReceiver;
-use begitter::model::View;
-use begitter::patch_editor::patch::Hunk;
-use failure;
-use std::cell::RefCell;
-use std::path::Path;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::Arc;
-use ui::windows::helpers::MessageData;
-use ui::windows::helpers::to_wstring;
-use ui::windows::helpers::WinApiError;
+
+use failure;
+
+use ui::windows::helpers::{MessageData, to_wstring, WinApiError};
 use ui::windows::utils::close_dialog;
+use winapi::um::winuser::{self, DialogBoxParamW, GetDlgItem, LB_ADDSTRING, LB_ERR, LB_ERRSPACE, LB_RESETCONTENT, PostMessageW, SetWindowTextW, WM_APP,
+	LB_SETCURSEL, LBN_SELCHANGE, LB_GETCURSEL, GetWindowTextW, GetWindowTextLengthW, EnableWindow, BN_CLICKED};
+use winapi::shared::minwindef::{FALSE, LPARAM, TRUE, UINT, WPARAM, LOWORD, DWORD, HIWORD};
 use winapi::ctypes::c_int;
-use winapi::shared::basetsd::INT_PTR;
-use winapi::shared::minwindef::FALSE;
-use winapi::shared::minwindef::LPARAM;
-use winapi::shared::minwindef::TRUE;
-use winapi::shared::minwindef::UINT;
-use winapi::shared::minwindef::WORD;
-use winapi::shared::minwindef::WPARAM;
-use winapi::shared::windef::HWND;
-use winapi::um::winuser;
-use winapi::um::winuser::DialogBoxParamW;
-use winapi::um::winuser::GetDlgItem;
-use winapi::um::winuser::LB_ADDSTRING;
-use winapi::um::winuser::LB_ERR;
-use winapi::um::winuser::LB_ERRSPACE;
-use winapi::um::winuser::LB_RESETCONTENT;
-use winapi::um::winuser::PostMessageW;
-use winapi::um::winuser::SetWindowTextW;
-use winapi::um::winuser::WM_APP;
-use winapi::um::winuser::LB_SETCURSEL;
-use winapi::um::winuser::LBN_SELCHANGE;
-use winapi::shared::minwindef::LOWORD;
-use winapi::shared::minwindef::DWORD;
-use winapi::shared::minwindef::HIWORD;
-use winapi::um::winuser::LB_GETCURSEL;
-use winapi::um::winuser::GetWindowTextW;
-use winapi::um::winuser::GetWindowTextLengthW;
+use winapi::shared::{basetsd::INT_PTR, windef::HWND, ntdef::PWSTR, ntdef::WCHAR};
+
+use begitter::model::rejects::{RejectsModel, RejectsViewReceiver};
+use begitter::model::View;
+use begitter::patch_editor::patch::Hunk;
 use ui::windows::helpers::from_wstring;
-use winapi::shared::ntdef::PWSTR;
-use winapi::shared::ntdef::WCHAR;
-use ui::windows::text::load_string;
-use ui::windows::text::STRING_REJECTS_UNACCEPT_HUNK;
-use ui::windows::text::STRING_REJECTS_ACCEPT_HUNK;
-use winapi::um::winuser::BN_CLICKED;
-use winapi::um::winuser::EnableWindow;
+use ui::windows::text::{load_string, STRING_REJECTS_UNACCEPT_HUNK, STRING_REJECTS_ACCEPT_HUNK};
 
 const ID_REJECTS_FILES_LISTBOX: c_int = 3;
 const ID_REJECTS_HUNKS_LISTBOX: c_int = 4;
@@ -58,9 +28,6 @@ const ID_REJECTS_SAVE_AND_QUIT_BUTTON: c_int = 9;
 const ID_REJECTS_ABORT_BUTTON: c_int = 10;
 
 const MESSAGE_MODEL_TO_REJECTS_VIEW: UINT = WM_APP + 1;
-
-pub const RESULT_ABORT: INT_PTR = 0;
-pub const RESULT_OK: INT_PTR = 1;
 
 static mut REJECTS_VIEW: Option<RejectsView> = None;
 
@@ -78,7 +45,6 @@ pub struct RejectsView {
 	rejects_window: HWND,
 	files_list_box: HWND,
 	hunks_list_box: HWND,
-	reset_button: HWND,
 	accept_button: HWND,
 	file_edit_text: HWND,
 	hunk_edit_text: HWND,
@@ -89,11 +55,11 @@ pub struct RejectsView {
 }
 
 impl RejectsView {
-	pub fn show(parent: HWND, repo_path: PathBuf) {
+	pub fn show(parent: HWND, repo_path: PathBuf) -> INT_PTR {
 		unsafe {
 			DialogBoxParamW(null_mut(), to_wstring("rejects_dialog").as_ptr(),
 				parent, Some(rejects_dialog_proc), Box::into_raw(Box::new(repo_path)) as LPARAM)
-		};
+		}
 	}
 
 	fn initialize(model: RejectsModel, rejects_window: HWND) -> Result<RejectsView, WinApiError> {
@@ -103,7 +69,6 @@ impl RejectsView {
 			files_list_box: try_get!(GetDlgItem(rejects_window, ID_REJECTS_FILES_LISTBOX)),
 			hunks_list_box: try_get!(GetDlgItem(rejects_window, ID_REJECTS_HUNKS_LISTBOX)),
 			accept_button: try_get!(GetDlgItem(rejects_window, ID_REJECTS_ACCEPT_BUTTON)),
-			reset_button: try_get!(GetDlgItem(rejects_window, ID_REJECTS_RESET_BUTTON)),
 			file_edit_text: try_get!(GetDlgItem(rejects_window, ID_REJECTS_FILE_EDIT_TEXT)),
 			hunk_edit_text: try_get!(GetDlgItem(rejects_window, ID_REJECTS_HUNK_EDIT_TEXT)),
 			save_and_quit_button: try_get!(GetDlgItem(rejects_window, ID_REJECTS_SAVE_AND_QUIT_BUTTON)),
@@ -161,7 +126,8 @@ impl RejectsView {
 						true
 					}
 					ID_REJECTS_ABORT_BUTTON => {
-						close_dialog(self.rejects_window, RESULT_ABORT as INT_PTR)?;
+						let result = Box::into_raw(Box::new(None::<Vec<String>>));
+						close_dialog(self.rejects_window, result as INT_PTR)?;
 						true
 					}
 					_ => false
@@ -240,7 +206,9 @@ impl RejectsView {
 				try_call!(SetWindowTextW(self.accept_button, accept_button_text.as_ptr() as *const _ as *const _), 0);
 			}
 			RejectsViewMessage::Finish => {
-				close_dialog(self.rejects_window, RESULT_OK)?;
+				let files = self.files.iter().map(|&(ref file, _)| file.clone()).collect::<Vec<String>>();
+				let result = Box::into_raw(Box::new(files));
+				close_dialog(self.rejects_window, result as INT_PTR)?;
 			}
 		}
 
@@ -278,7 +246,8 @@ pub extern "system" fn rejects_dialog_proc(hwnd_dlg: HWND, message: UINT, w_para
 			true
 		}
 		winuser::WM_CLOSE => {
-			close_dialog(hwnd_dlg, RESULT_ABORT).unwrap();
+			let result = Box::into_raw(Box::new(None::<Vec<String>>));
+			close_dialog(hwnd_dlg, result as INT_PTR).unwrap();
 			true
 		}
 		_ => {

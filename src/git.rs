@@ -14,7 +14,7 @@ use super::parsing_utils::file_name;
 #[cfg(windows)]
 use {
 	std::os::windows::process::CommandExt,
-	winapi::um::winbase::CREATE_NO_WINDOW
+	winapi::um::winbase::CREATE_NO_WINDOW,
 };
 
 const COMMAND: &str = "git";
@@ -23,6 +23,12 @@ const STATUS_PORCELAIN_V2_COLUMNS: usize = 11;
 pub const BRANCH_PREFIX: &str = "refs/heads/";
 
 pub type Result<T> = ::std::result::Result<T, GitError>;
+
+pub enum PatchApplicationMode {
+	IndexOnly,
+	WorkingDirectory3Way,
+	WorkingDirectoryWithRejects,
+}
 
 pub struct Git {
 	repo_dir: OsString
@@ -39,8 +45,8 @@ impl Git {
 		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
 		let mut command = Command::new(COMMAND);
 		command.arg("-C")
-			.arg(&self.repo_dir)
-			.args(args);
+				.arg(&self.repo_dir)
+				.args(args);
 		if cfg!(windows) {
 			command.creation_flags(CREATE_NO_WINDOW);
 		}
@@ -142,7 +148,7 @@ impl Git {
 				range = String::from(base_commit_spec) + "..HEAD";
 				args.push("--ancestry-path");
 				args.push(&range);
-			},
+			}
 			None => args.push("HEAD")
 		}
 
@@ -178,7 +184,7 @@ impl Git {
 	}
 
 	pub fn read_tree<S: AsRef<str>>(&self, commit_spec: Option<S>) -> Result<()> {
-		let target = commit_spec.as_ref().map_or("--empty", |spec| spec.as_ref() );
+		let target = commit_spec.as_ref().map_or("--empty", |spec| spec.as_ref());
 		self.run_command(&["read-tree", target])?;
 		Ok(())
 	}
@@ -189,14 +195,13 @@ impl Git {
 		Ok(())
 	}
 
-	pub fn apply(&self, patch: &[u8], working_tree: bool) -> Result<()> {
+	pub fn apply(&self, patch: &[u8], mode: PatchApplicationMode) -> Result<()> {
 		let mut args = vec!["apply"];
 
-		if working_tree {
-			args.push("--index");
-			args.push("--3way");
-		} else {
-			args.push("--cached");
+		match mode {
+			PatchApplicationMode::IndexOnly => args.push("--cached"),
+			PatchApplicationMode::WorkingDirectory3Way => args.push("--3way"),
+			PatchApplicationMode::WorkingDirectoryWithRejects => args.push("--reject")
 		}
 
 		args.push("-");
@@ -242,7 +247,7 @@ pub enum GitError {
 	#[fail(display = "Error when parsing the patch data: {:?}", _0)]
 	ParsingError(ErrorKind, Backtrace),
 	#[fail(display = "Git failure, status {:?}: {}", _0, _1)]
-	StatusError(Option<i32>, String, Backtrace)
+	StatusError(Option<i32>, String, Backtrace),
 }
 
 impl GitError {
@@ -273,7 +278,7 @@ impl<I> From<Err<I>> for GitError {
 }
 
 #[cfg(test)]
-mod test { // TODO: undo marking variables as unused, this breaks stuff
+mod test {
 	use super::*;
 	use std::path::{Path, PathBuf};
 	use std::env::var;
@@ -320,18 +325,34 @@ index 9944a9f..e9459b0 100644
 
 		let target_commit = git.show_ref("reading-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
-		
+
 		(git, temp_dir)
 	}
 
-	fn apply_patch_with_conflicts(git: &Git) {
+	fn apply_patch_with_conflicts(git: &Git, use_rejects: bool) {
 		let target_commit = git.show_ref("conflict-tests").unwrap();
 		git.update_ref("HEAD", &target_commit).unwrap();
 		git.read_tree(Some("refs/tags/conflict-tests")).unwrap();
 		git.checkout_index().unwrap();
 
-		let apply_result = git.apply(PATCH, true);
+		let mode = if use_rejects { PatchApplicationMode::WorkingDirectoryWithRejects } else { PatchApplicationMode::WorkingDirectory3Way };
+		let apply_result = git.apply(PATCH, mode);
 		assert!(apply_result.is_err());
+	}
+
+	fn find_rejects(dir_path: &Path) -> Vec<PathBuf> {
+		let mut files = Vec::new();
+		for entry in read_dir(dir_path).unwrap() {
+			let path = entry.unwrap().path();
+			if path.is_dir() {
+				files.extend(find_rejects(&path));
+			} else if path.is_file() {
+				if path.extension().map_or(false, |extension| extension == "rej") {
+					files.push(path);
+				}
+			}
+		}
+		files
 	}
 
 	#[test]
@@ -413,15 +434,34 @@ index afe0cb3..9944a9f 100644
 	fn test_apply() {
 		let (git, _temp_dir) = create_git();
 		git.read_tree(Some("refs/tags/reading-tests")).unwrap();
-		git.apply(PATCH, false).unwrap();
+		git.apply(PATCH, PatchApplicationMode::IndexOnly).unwrap();
 
 		assert!(!git.diff_index_names("refs/tags/reading-tests").unwrap().is_empty());
 	}
 
 	#[test]
+	fn test_apply_with_conflicts() {
+		let (git, temp_dir) = create_git();
+		apply_patch_with_conflicts(&git, false);
+
+		let conflicts = git.status_conflicts().unwrap();
+		assert_eq!(vec!["Test file.txt"], conflicts);
+		let rejects = find_rejects(temp_dir.path());
+		assert_eq!(<Vec<PathBuf>>::new(), rejects);
+
+		let (git, temp_dir) = create_git();
+		apply_patch_with_conflicts(&git, true);
+
+		let conflicts = git.status_conflicts().unwrap();
+		assert_eq!(<Vec<String>>::new(), conflicts);
+		let rejects = find_rejects(temp_dir.path());
+		assert_eq!(vec![temp_dir.into_path().join("Test file.txt.rej")], rejects);
+	}
+
+	#[test]
 	fn test_status_conflicts() {
 		let (git, _temp_dir) = create_git();
-		apply_patch_with_conflicts(&git);
+		apply_patch_with_conflicts(&git, false);
 
 		assert_eq!(vec!["Test file.txt"], git.status_conflicts().unwrap());
 	}
@@ -429,13 +469,13 @@ index afe0cb3..9944a9f 100644
 	#[test]
 	fn test_update_index() {
 		let (git, temp_dir) = create_git();
-		apply_patch_with_conflicts(&git);
+		apply_patch_with_conflicts(&git, false);
 
 		let mut test_file_path = temp_dir.path().to_owned();
 		test_file_path.push("Test file.txt");
 
 		{
-			let mut file = File::create(test_file_path,).unwrap();
+			let mut file = File::create(test_file_path).unwrap();
 			file.write_all(b"This is just a test file\n").unwrap();
 		};
 
