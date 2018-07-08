@@ -120,7 +120,7 @@ impl Parser {
 		Ok(FileProperties {
 			name: self.old_name.clone().ok_or(ParseError::PartAbsent("Old name"))?,
 			mode: self.old_mode.clone().ok_or(ParseError::PartAbsent("Old mode"))?,
-			index: self.old_index.clone().ok_or(ParseError::PartAbsent("Old index"))?,
+			index: Some(self.old_index.clone().ok_or(ParseError::PartAbsent("Old index"))?),
 		})
 	}
 
@@ -128,7 +128,7 @@ impl Parser {
 		Ok(FileProperties {
 			name: self.new_name.clone().ok_or(ParseError::PartAbsent("New name"))?,
 			mode: self.new_mode.clone().ok_or(ParseError::PartAbsent("New mode"))?,
-			index: self.new_index.clone().ok_or(ParseError::PartAbsent("New index"))?,
+			index: Some(self.new_index.clone().ok_or(ParseError::PartAbsent("New index"))?),
 		})
 	}
 }

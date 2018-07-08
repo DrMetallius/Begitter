@@ -28,13 +28,14 @@ fn check_overlaps(hunks: &[Hunk], other_hunks: &[Hunk]) -> bool {
 #[fail(display = "Some hunks are overlapping")]
 pub struct OverlappingHunkError;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Patch {
 	pub change: Change,
 	pub hunks: Vec<Hunk>,
 }
 
-impl Patch { // TODO: check if we actually need to forbid overlapping hunks
+impl Patch {
+	// TODO: check if we actually need to forbid overlapping hunks
 	pub fn new(change: Change, hunks: Vec<Hunk>) -> Result<Patch, OverlappingHunkError> {
 		let mut sorted_hunks = hunks;
 		sorted_hunks.sort_unstable();
@@ -62,25 +63,41 @@ impl Patch { // TODO: check if we actually need to forbid overlapping hunks
 
 		write.write_fmt(format_args!("diff --git {} {}\n", prefixed_escaped_old_name, prefixed_escaped_new_name))?;
 
-		let operation_data = match self.change {
-			Change::Addition { ref new_properties } => Some(format!("new file mode {}\n", new_properties.mode)),
-			Change::Removal { ref old_properties } => Some(format!("deleted file mode {}\n", old_properties.mode)),
-			Change::Modification { ref modification_type, ref old_properties, ref new_properties } => {
-				match modification_type {
-					&ModificationType::Edited => None,
-					&ModificationType::Copied { .. } => Some(format!("copy from {}\ncopy to {}\n", format_name(&old_properties.name),
-						format_name(&new_properties.name))),
-					&ModificationType::Renamed { .. } => Some(format!("rename from {}\nrename to {}\n", format_name(&old_properties.name),
-						format_name(&new_properties.name))),
-					&ModificationType::ModeChanged => Some(format!("old mode {}\nnew mode {}\n", old_properties.mode, new_properties.mode))
+		let operation_lines = match self.change {
+			Change::Addition { ref new_properties } => {
+				let mut operation_lines = format!("new file mode {}\n", new_properties.mode);
+				if let Some(ref index) = new_properties.index {
+					operation_lines.push_str(&format!("index 00000000..{}\n", index));
 				}
+				operation_lines
+			}
+			Change::Removal { ref old_properties } => {
+				let mut operation_lines = format!("deleted file mode {}\n", old_properties.mode);
+				if let Some(ref index) = old_properties.index {
+					operation_lines.push_str(&format!("index {}..00000000 {}\n", index, old_properties.mode));
+				}
+				operation_lines
+			}
+			Change::Modification { ref modification_type, ref old_properties, ref new_properties } => {
+				let mut operation_lines = match modification_type {
+					&ModificationType::Edited => "".into(),
+					&ModificationType::Copied { .. } => format!("copy from {}\ncopy to {}\n", format_name(&old_properties.name),
+						format_name(&new_properties.name)),
+					&ModificationType::Renamed { .. } => format!("rename from {}\nrename to {}\n", format_name(&old_properties.name),
+						format_name(&new_properties.name)),
+					&ModificationType::ModeChanged => format!("old mode {}\nnew mode {}\n", old_properties.mode, new_properties.mode)
+				};
+
+				if let Some(ref old_index) = old_properties.index {
+					if let Some(ref new_index) = new_properties.index {
+						operation_lines.push_str(&format!("index {}..{} {}\n", old_index, new_index, old_properties.mode));
+					}
+				}
+				operation_lines
 			}
 		};
 
-		if let Some(header_line) = operation_data {
-			write.write_all(header_line.as_bytes())?;
-		}
-
+		write.write_all(operation_lines.as_bytes())?;
 		write.write_fmt(format_args!("--- {}\n", prefixed_escaped_old_name))?;
 		write.write_fmt(format_args!("+++ {}\n", prefixed_escaped_new_name))?;
 
@@ -103,18 +120,21 @@ impl Patch { // TODO: check if we actually need to forbid overlapping hunks
 			panic!("Only the edit patch can be changed. No addition, removal, mode change, or name change patches can be changed.");
 		}
 
+		self.remove_indexes();
+
 		let mut sorted_positions = positions.to_vec();
 		sorted_positions.sort_unstable();
 
-		sorted_positions
-				.into_iter()
-				.rev()
-				.map(|position| self.hunks.remove(position))
-				.rev()
-				.collect()
+		let mut hunks = Vec::new();
+		for position in sorted_positions.into_iter().rev() {
+			hunks.insert(0, self.hunks.remove(position));
+		}
+		hunks
 	}
 
 	pub fn move_out_hunks_into_patch(&mut self, positions: &[usize]) -> Patch {
+		self.remove_indexes();
+
 		let change = self.change.clone();
 		let hunks = self.move_out_hunks(positions);
 
@@ -129,6 +149,7 @@ impl Patch { // TODO: check if we actually need to forbid overlapping hunks
 
 		if check_overlaps(&hunks, &patch.hunks) { return Err(OverlappingHunkError); }
 
+		patch.remove_indexes();
 		patch.hunks.append(&mut hunks);
 		patch.hunks.sort_unstable();
 
@@ -136,6 +157,8 @@ impl Patch { // TODO: check if we actually need to forbid overlapping hunks
 	}
 
 	pub fn remove_hunks(&mut self, positions: &[usize]) {
+		self.remove_indexes();
+
 		let mut sorted_positions = positions.to_vec();
 		sorted_positions.sort_unstable();
 		sorted_positions
@@ -144,6 +167,15 @@ impl Patch { // TODO: check if we actually need to forbid overlapping hunks
 				.for_each(|position| {
 					self.hunks.remove(position);
 				});
+	}
+
+	fn remove_indexes(&mut self) {
+		match self.change {
+			Change::Addition { new_properties: FileProperties { ref mut index, .. } } | Change::Modification { new_properties: FileProperties { ref mut index, .. }, .. } => {
+				*index = None
+			}
+			Change::Removal { .. } => ()
+		}
 	}
 }
 
@@ -202,7 +234,7 @@ pub enum Change {
 pub struct FileProperties {
 	pub name: String,
 	pub mode: String,
-	pub index: String,
+	pub index: Option<String>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -213,7 +245,7 @@ pub enum ModificationType {
 	Edited,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Hunk {
 	pub old_file_range: Range<usize>,
 	pub new_file_range: Range<usize>,
@@ -262,6 +294,15 @@ mod test {
 	fn test_write_patch() {
 		let mut buf = Vec::new();
 		PATCH.write(&mut buf).unwrap();
+
+		assert_eq!(&*buf, &**PATCH_DATA);
+
+		let mut modified_patch = (*PATCH).clone();
+		let mut other_patch = modified_patch.move_out_hunks_into_patch(&[0, 1]);
+		other_patch.move_hunks_to(&[0, 1], &mut modified_patch).unwrap();
+
+		buf.clear();
+		modified_patch.write(&mut buf).unwrap();
 
 		assert_eq!(&*buf, &**PATCH_DATA_NO_EXTENDED_HEADER);
 	}
