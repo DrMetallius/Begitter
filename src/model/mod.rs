@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 pub mod main;
 pub mod rejects;
+pub mod patches;
 
 #[derive(Clone)]
 struct Model<C: Send + 'static> {

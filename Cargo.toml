@@ -7,6 +7,7 @@ authors = ["Alexander Gazarov <unrealrider@gmail.com>"]
 nom = "^4.0"
 failure = "^0.1"
 pathdiff = "^0.1"
+uuid = { version = "^0.6", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "^0.3", features = ["combaseapi", "commctrl", "errhandlingapi", "libloaderapi", "shobjidl", "winuser", "wincon", "windowsx", "winerror"] }

@@ -63,8 +63,8 @@ impl MainModel {
 		model
 	}
 
-	fn perform_command<V: MainViewReceiver>(view: &V, ref mut state: &mut State, command: Command) -> Result<(), failure::Error> {
-		fn show_combined_patches<V: MainViewReceiver>(view: &V, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
+	fn perform_command(view: &impl MainViewReceiver, ref mut state: &mut State, command: Command) -> Result<(), failure::Error> {
+		fn show_combined_patches(view: &impl MainViewReceiver, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
 			view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
 		}
 
@@ -135,7 +135,7 @@ impl MainModel {
 		Ok(())
 	}
 
-	fn get_branches_and_commits(view: &MainViewReceiver, State { ref mut git, ref mut combined_patches, .. }: &mut State) -> Result<(), failure::Error> { // TODO: am I using trait objects here? Don't.
+	fn get_branches_and_commits(view: &impl MainViewReceiver, State { ref mut git, ref mut combined_patches, .. }: &mut State) -> Result<(), failure::Error> { // TODO: am I using trait objects here? Don't.
 		let refs = git.show_refs_heads()?;
 		let unprocessed_parts_to_refs = refs
 				.iter()
@@ -161,7 +161,7 @@ impl MainModel {
 		view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
 	}
 
-	fn apply_existing_patches(view: &MainViewReceiver, state: &mut State, branch_under_update: &str, starting_target_commit: Option<String>, resume_previous_operation: bool) -> Result<(), failure::Error> {
+	fn apply_existing_patches(view: &impl MainViewReceiver, state: &mut State, branch_under_update: &str, starting_target_commit: Option<String>, resume_previous_operation: bool) -> Result<(), failure::Error> {
 		// TODO: this is the scenario when we are in a clean state, HEAD points to the changed branch. Consider other states.
 		let mut target_commit = starting_target_commit;
 		let mut applied_patches = 0usize;
@@ -244,7 +244,7 @@ impl MainModel {
 		}
 	}
 
-	fn resolve_conflicts_and_continue(view: &MainViewReceiver, state: &mut State) -> Result<(), failure::Error> {
+	fn resolve_conflicts_and_continue(view: &impl MainViewReceiver, state: &mut State) -> Result<(), failure::Error> {
 		let result = state.git.merge_tool();
 		match result {
 			Ok(_) => {
@@ -259,7 +259,7 @@ impl MainModel {
 		Ok(())
 	}
 
-	fn update_files_and_continue_application<I, S>(view: &MainViewReceiver, state: &mut State, updated_files: I) -> Result<(), failure::Error>
+	fn update_files_and_continue_application<I, S>(view: &impl MainViewReceiver, state: &mut State, updated_files: I) -> Result<(), failure::Error>
 		where I: IntoIterator<Item=S>, S: AsRef<OsStr> {
 		let branch = state.branch_under_update.as_ref().unwrap().clone();
 		let target_commit = Some(state.git.show_ref("HEAD")?);

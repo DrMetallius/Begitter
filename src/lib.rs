@@ -5,6 +5,8 @@ extern crate failure;
 
 extern crate winapi;
 extern crate time;
+extern crate pathdiff;
+extern crate uuid;
 
 #[cfg(test)]
 #[macro_use]
@@ -12,7 +14,6 @@ extern crate lazy_static;
 
 #[cfg(test)]
 extern crate tempdir;
-extern crate pathdiff;
 
 pub mod patch_editor;
 pub mod git;
