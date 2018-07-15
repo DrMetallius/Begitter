@@ -115,6 +115,13 @@ impl Patch {
 		}
 	}
 
+	pub fn get_edit_patch_file_name(&self) -> Option<&String> {
+		match self.change {
+			Change::Modification { modification_type: ModificationType::Edited, ref new_properties, .. } => Some(&new_properties.name),
+			_ => None
+		}
+	}
+
 	fn move_out_hunks(&mut self, positions: &[usize]) -> Vec<Hunk> {
 		if !self.is_edit() {
 			panic!("Only the edit patch can be changed. No addition, removal, mode change, or name change patches can be changed.");
