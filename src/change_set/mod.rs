@@ -3,12 +3,15 @@ mod parser;
 use std::io::{Error, Write};
 use std::collections::{HashSet, HashMap};
 use std::borrow::Borrow;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt;
 
 use time::{self, Timespec};
 use failure::{self, Backtrace};
 use nom::ErrorKind;
 
-use patch_editor::patch::{Patch, Change, ModificationType};
+use patch_editor::patch::{Patch, Change, ModificationType, OverlappingHunkError};
 
 struct PatchClassification<T> {
 	file_addition: HashMap<String, T>,
@@ -40,6 +43,24 @@ impl<T: Borrow<Patch>> PatchClassification<T> {
 		}
 
 		classification
+	}
+}
+
+fn classification_into_original_patch(classification: PatchClassification<Patch>, original_patch_info: Option<ChangeSetInfo>) -> CombinedPatch {
+	let patches = vec![classification.file_addition, classification.file_removal_only, classification.modification]
+			.into_iter()
+			.flat_map(|map| map.into_iter().map(|(_, patch)| patch).collect::<Vec<Patch>>())
+			.collect();
+
+	let info = if let Some(info) = original_patch_info {
+		info
+	} else {
+		ChangeSetInfo::default()
+	};
+
+	CombinedPatch {
+		info,
+		patches,
 	}
 }
 
@@ -76,6 +97,7 @@ fn get_modification_file_name(patch: &Patch) -> Option<&String> {
 	None
 }
 
+#[derive(Debug)]
 pub struct CombinedPatch {
 	pub info: ChangeSetInfo,
 	pub patches: Vec<Patch>,
@@ -89,22 +111,52 @@ impl CombinedPatch {
 				.collect()
 	}
 
-	pub fn absorb(&mut self, combined_patch: CombinedPatch) -> Result<(), failure::Error> {
+	pub fn absorb(&mut self, CombinedPatch { info, patches }: CombinedPatch) -> Result<(), AbsorbtionError> {
+		self.absorb_patches(Some(info), patches.into_iter())
+	}
+
+	pub fn move_patches_to(&mut self, patch_positions: &[usize], combined_patch: &mut CombinedPatch) -> Result<(), AbsorbtionError> {
+		let mut transferred_patches = Vec::new();
+		for position in patch_positions.iter().rev() {
+			transferred_patches.push(combined_patch.patches.remove(*position));
+		}
+
+		let result = self.absorb_patches(None, transferred_patches.into_iter());
+		match result {
+			Ok(_) => result,
+			Err(err) => {
+				let unprocessed_patches = err.combined_patch.unwrap().patches;
+				combined_patch.patches.extend(unprocessed_patches.into_iter()); // If it becomes inconvenient, we could even restore the original order
+
+				Err(AbsorbtionError {
+					combined_patch: None,
+					variant: err.variant,
+				})
+			}
+		}
+	}
+
+	fn absorb_patches(&mut self, original_patch_info: Option<ChangeSetInfo>, patches: impl Iterator<Item=Patch>) -> Result<(), AbsorbtionError> {
 		let (other_file_addition, other_file_removal_only, other_modification) = {
 			let mut classification = PatchClassification::classify(self.patches.iter_mut());
-			let mut other_classification = PatchClassification::classify(combined_patch.patches.into_iter());
+			let mut other_classification = PatchClassification::classify(patches);
 
 			if classification.file_addition.keys().any(|key| other_classification.file_addition.contains_key(key)) {
-				return Err(AbsorbtionError::ConflictingAdditions(Backtrace::new()).into());
+				let absorbtion_error = AbsorbtionError {
+					combined_patch: Some(classification_into_original_patch(other_classification, original_patch_info)),
+					variant: AbsorbtionErrorVariant::ConflictingAdditions,
+				};
+				return Err(absorbtion_error.into());
 			}
 
 			// First do what we can with classification, the release it to operate on self.patches directly
 			let mut other_unmerged_modification_patches = Vec::new();
+
 			for (key, mut other_patch) in other_classification.modification {
 				match classification.modification.get_mut(&key) {
 					Some(patch) => {
 						let positions = (0..other_patch.hunks.len()).into_iter().collect::<Vec<_>>();
-						other_patch.move_hunks_to(&positions, patch)?
+						other_patch.move_hunks_to(&positions, patch).unwrap(); // We'll remove the overlapping hunks check later, so this won't matter
 					}
 					None => other_unmerged_modification_patches.push(other_patch)
 				}
@@ -131,9 +183,31 @@ impl CombinedPatch {
 }
 
 #[derive(Fail, Debug)]
-pub enum AbsorbtionError {
-	#[fail(display = "The same files were added in both combined patches")]
-	ConflictingAdditions(Backtrace)
+pub struct AbsorbtionError {
+	pub combined_patch: Option<CombinedPatch>,
+	pub variant: AbsorbtionErrorVariant,
+}
+
+impl AbsorbtionError {
+	pub fn into_patch(self) -> (AbsorbtionError, Option<CombinedPatch>) {
+		let error = AbsorbtionError {
+			combined_patch: None,
+			variant: self.variant,
+		};
+		(error, self.combined_patch)
+	}
+}
+
+impl Display for AbsorbtionError {
+	fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+		write!(f, "Couldn't absorb patches as they contain conflicting additions")
+	}
+}
+
+#[derive(Debug)]
+pub enum AbsorbtionErrorVariant {
+	ConflictingAdditions,
+	HunkError(OverlappingHunkError),
 }
 
 #[derive(Clone)]
@@ -154,6 +228,16 @@ pub struct ChangeSetInfo {
 	pub author_action: PersonAction,
 	pub committer_action: PersonAction,
 	pub message: String,
+}
+
+impl Default for ChangeSetInfo {
+	fn default() -> ChangeSetInfo {
+		ChangeSetInfo {
+			author_action: PersonAction::default(),
+			committer_action: PersonAction::default(),
+			message: "".into(),
+		}
+	}
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
