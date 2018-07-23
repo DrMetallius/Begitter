@@ -1,19 +1,41 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
-use uuid::Uuid;
-use failure::Backtrace;
+use uuid::{Uuid, UuidVersion};
 
 use model::View;
-use patch_editor::patch::{FileProperties, Change, ModificationType, OverlappingHunkError};
-use change_set::{CombinedPatch, AbsorbtionError};
+use patch_editor::patch::{Change, ModificationType, OverlappingHunkError};
+use change_set::{AbsorbtionError, CombinedPatch};
+
+macro_rules! check_presence {
+	($($var:ident), *) => {
+        $(
+            let $var = $var.ok_or(HunkTransferringError::UnspecifiedSourceOrDestination)?;
+        )*
+	};
+}
 
 pub enum Direction {
 	Left,
 	Right,
 }
 
-struct PatchesModel<T: PatchesViewReceiver> {
+#[derive(Copy, Clone)]
+struct Side {
+	selected_combined_patch: Option<Uuid>,
+	selected_patch: Option<usize>,
+}
+
+impl Default for Side {
+	fn default() -> Side {
+		Side {
+			selected_combined_patch: None,
+			selected_patch: None,
+		}
+	}
+}
+
+pub struct PatchesModel<T: PatchesViewReceiver> {
 	patches: HashMap<Uuid, CombinedPatch>,
 	left: Side,
 	right: Side,
@@ -21,26 +43,40 @@ struct PatchesModel<T: PatchesViewReceiver> {
 	view: T,
 }
 
-#[derive(Copy, Clone)]
-struct Side {
-	selected_combined_patch: Uuid,
-	selected_patch: usize,
-}
-
 impl<T: PatchesViewReceiver> PatchesModel<T> {
-	fn is_simple_patch(&self, side: &Side) -> bool { // Involves only one file, not a rename, copy, or mode change
-		let combined_patch = &self.patches[&side.selected_combined_patch];
-		combined_patch.patches
-				.iter()
-				.all(|patch| {
-					match patch.change {
-						Change::Modification { ref modification_type, .. } => match modification_type {
-							ModificationType::Edited { .. } => true,
-							_ => false
-						},
-						_ => true
+	pub fn new(view: T, patches: Vec<CombinedPatch>) -> PatchesModel<T> {
+		let patches_map = patches.into_iter()
+				.map(|patch| (Uuid::new(UuidVersion::Random).unwrap(), patch))
+				.collect();
+
+		let mut model = PatchesModel {
+			patches: patches_map,
+			left: Side::default(),
+			right: Side::default(),
+			view,
+		};
+
+		{
+			let mut iter = model.patches.iter().take(2);
+
+			fn side_from_iter<'a, 'b>(side: &mut Side, iter: &mut impl Iterator<Item=(&'a Uuid, &'b CombinedPatch)>) {
+				if let Some((uuid, patch)) = iter.next() {
+					side.selected_combined_patch = Some(*uuid);
+					if patch.patches.len() > 0 {
+						side.selected_patch = Some(0);
 					}
-				})
+				}
+			}
+
+			side_from_iter(&mut model.left, &mut iter);
+			side_from_iter(&mut model.right, &mut iter);
+		}
+
+		model
+	}
+
+	pub fn into_patches(self) -> Vec<CombinedPatch> {
+		self.patches.into_iter().map(|(_, patch)| patch).collect()
 	}
 
 	fn get_sides_by_direction(&self, direction: Direction) -> (Side, Side) {
@@ -50,8 +86,10 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 		}
 	}
 
-	pub fn transfer_all_changes(&mut self, direction: Direction) {
+	pub fn transfer_all_changes(&mut self, direction: Direction) -> Result<(), HunkTransferringError> {
 		let (Side { selected_combined_patch: source, .. }, Side { selected_combined_patch: destination, .. }) = self.get_sides_by_direction(direction);
+		check_presence!(source, destination);
+
 		let source_patch = self.patches.remove(&source).unwrap();
 
 		let result = {
@@ -71,10 +109,14 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 			}
 			_ => ()
 		}
+
+		Ok(())
 	}
 
-	pub fn transfer_changes(&mut self, direction: Direction, patch_positions: &[usize]) {
+	pub fn transfer_changes(&mut self, direction: Direction, patch_positions: &[usize]) -> Result<(), HunkTransferringError> {
 		let (Side { selected_combined_patch: source, .. }, Side { selected_combined_patch: destination, .. }) = self.get_sides_by_direction(direction);
+		check_presence!(source, destination);
+
 		let mut source_patch = self.patches.remove(&source).unwrap();
 
 		let result = {
@@ -87,11 +129,14 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 			Err(err) => self.view.error(err.into()),
 			_ => ()
 		}
+
+		Ok(())
 	}
 
 	pub fn transfer_hunks(&mut self, direction: Direction, hunks: impl Iterator<Item=usize>) -> Result<(), HunkTransferringError> {
 		let (Side { selected_combined_patch: source_id, selected_patch: source_patch_pos },
 			Side { selected_combined_patch: destination_id, .. }) = self.get_sides_by_direction(direction);
+		check_presence!(source_id, source_patch_pos, destination_id);
 
 		let mut source_combined_patch = self.patches.remove(&source_id).unwrap();
 		let result = {
@@ -118,6 +163,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 		self.patches.insert(source_id, source_combined_patch);
 
 		result?;
+
 		Ok(())
 	}
 }
@@ -128,7 +174,8 @@ pub trait PatchesViewReceiver: View {}
 pub enum HunkTransferringError {
 	SourcePatchIsNotModification,
 	DestinationPatchNotFoundOrNotModification,
-	OverlappingHunks(#[cause] OverlappingHunkError)
+	OverlappingHunks(#[cause] OverlappingHunkError),
+	UnspecifiedSourceOrDestination,
 }
 
 impl From<OverlappingHunkError> for HunkTransferringError {
@@ -142,7 +189,8 @@ impl Display for HunkTransferringError {
 		let description = match self {
 			HunkTransferringError::SourcePatchIsNotModification => "Can't modify patches which are not modifications",
 			HunkTransferringError::DestinationPatchNotFoundOrNotModification => "Couldn't find a matching patch, or it was not a modification",
-			HunkTransferringError::OverlappingHunks(_) => "Hunks in the patches are overlapping"
+			HunkTransferringError::OverlappingHunks(_) => "Hunks in the patches are overlapping",
+			HunkTransferringError::UnspecifiedSourceOrDestination => "Source and/or destination not specified, select patches and/or changes first"
 		};
 		write!(f, "{}", description)
 	}
