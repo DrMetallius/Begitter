@@ -40,6 +40,9 @@ use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_lis
 	get_dialog_field_text, get_window_client_area, set_dialog_field_text, show_context_menu};
 use ui::windows::dpi::GetDpiForWindow;
 use ui::windows::rejects::RejectsView;
+use ui::windows::patches::PatchesView;
+use begitter::change_set::CombinedPatch;
+use ui::windows::text::STRING_MAIN_EDIT;
 
 const MAIN_CLASS: &str = "main";
 
@@ -271,7 +274,7 @@ impl MainViewReceiver for MainViewRelay {
 		self.post_on_main_thread(MainViewMessage::Commits(commits)).map_err(|err| err.into())
 	}
 
-	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error> {
+	fn show_combined_patches(&self, combined_patches: Vec<CombinedPatch>) -> Result<(), failure::Error> {
 		self.post_on_main_thread(MainViewMessage::CombinedPatches(combined_patches)).map_err(|err| err.into())
 	}
 
@@ -287,7 +290,7 @@ impl MainViewReceiver for MainViewRelay {
 enum MainViewMessage {
 	Branches(Vec<BranchItem>),
 	Commits(Vec<Commit>),
-	CombinedPatches(Vec<ChangeSetInfo>),
+	CombinedPatches(Vec<CombinedPatch>),
 	ResolveRejects,
 	NotifyConflicts
 }
@@ -307,13 +310,14 @@ struct MainView {
 	branches_tree_view: HWND,
 	commits_list_view: HWND,
 	combined_patches_list_view: HWND,
+	edit_button: HWND,
 	continue_button: HWND,
 	abort_button: HWND,
 
 	branches: Vec<BranchItem>,
 	commits: Vec<Commit>,
 	commit_strings: Vec<Vec<WideString>>,
-	combined_patches: Vec<ChangeSetInfo>,
+	combined_patches: Vec<CombinedPatch>,
 	combined_patch_strings: Vec<Vec<WideString>>,
 	continue_button_state: ContinueButtonState,
 
@@ -347,6 +351,11 @@ impl MainView {
 				MainView::COMMIT_AND_PATCH_HOR_POSITION, MainView::EDGE_MARGIN, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
 		try_call!(SetWindowTextW(patches_label, load_string(STRING_MAIN_PATCHES)?.as_ptr()), 0);
+
+		let edit_button = try_get!(CreateWindowExW(0, button_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+				MainView::COMMIT_AND_PATCH_HOR_POSITION + MainView::LABEL_WIDTH * 2 + MainView::SEPARATOR_WIDTH, MainView::EDGE_MARGIN - 4,
+				MainView::BUTTON_WIDTH, MainView::BUTTON_HEIGHT, main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+		try_call!(SetWindowTextW(edit_button, load_string(STRING_MAIN_EDIT)?.as_ptr()), 0);
 
 		let commits_label = try_get!(CreateWindowExW(0, static_class.as_ptr(), null_mut(), WS_VISIBLE | WS_CHILD, 0, 0, MainView::LABEL_WIDTH, MainView::LABEL_HEIGHT,
 				main_window as HWND, 0 as HMENU, 0 as HINSTANCE, null_mut()));
@@ -386,6 +395,7 @@ impl MainView {
 			branches_tree_view,
 			combined_patches_list_view,
 			commits_list_view,
+			edit_button,
 			continue_button,
 			abort_button,
 			branches: Vec::new(),
@@ -438,9 +448,10 @@ impl MainView {
 				self.combined_patches = combined_patches;
 				MainView::update_list_view(self.combined_patches_list_view, &self.combined_patches, &mut self.combined_patch_strings,
 						|patch| {
-							vec![patch.message.as_str().into(),
-								patch.author_action.name.as_str().into(),
-								format_time(patch.author_action.time).into()]
+							let info = &patch.info;
+							vec![info.message.as_str().into(),
+								info.author_action.name.as_str().into(),
+								format_time(info.author_action.time).into()]
 						})?;
 			}
 			MainViewMessage::ResolveRejects => self.resolve_rejects()?,
@@ -574,6 +585,13 @@ impl MainView {
 						}
 						_ => false
 					}
+				} else if message_data.l_param as HWND == self.edit_button {
+					let result = PatchesView::show(self.main_window, self.combined_patches.clone());
+					let new_patches = *unsafe { Box::from_raw(result as *mut Option<Vec<CombinedPatch>>) };
+					if let Some(new_patches) = new_patches {
+						self.model.as_ref().unwrap().update_patches(new_patches);
+					}
+					true
 				} else if message_data.l_param as HWND == self.continue_button {
 					match self.continue_button_state {
 						ContinueButtonState::Unavailable => panic!("The continue button is unavailable, but received a command from it"),
@@ -687,7 +705,7 @@ impl MainView {
 		let result = show_context_menu(self.main_window, self.combined_patches_list_view, &info.ptAction, MAIN_MENU_COMBINED_PATCH);
 		match result {
 			self::ID_MENU_EDIT_MESSAGE => {
-				let original_text = Box::into_raw(Box::new(self.combined_patches[selected_item as usize].message.clone()));
+				let original_text = Box::into_raw(Box::new(self.combined_patches[selected_item as usize].info.message.clone()));
 				let text_box_ptr = unsafe { DialogBoxParamW(null_mut(), to_wstring("main_commit_message_dialog").as_ptr(),
 					self.main_window, Some(edit_message_dialog_proc), original_text as LPARAM) };
 				let mut text = match text_box_ptr {

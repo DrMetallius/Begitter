@@ -97,7 +97,7 @@ fn get_modification_file_name(patch: &Patch) -> Option<&String> {
 	None
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CombinedPatch {
 	pub info: ChangeSetInfo,
 	pub patches: Vec<Patch>,

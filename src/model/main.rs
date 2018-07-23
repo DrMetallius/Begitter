@@ -22,6 +22,7 @@ enum Command {
 	ResolveConflicts,
 	AbortApplication,
 	SwitchToBranch(String),
+	UpdatePatches(Vec<CombinedPatch>)
 }
 
 #[derive(PartialEq)]
@@ -65,7 +66,7 @@ impl MainModel {
 
 	fn perform_command(view: &impl MainViewReceiver, ref mut state: &mut State, command: Command) -> Result<(), failure::Error> {
 		fn show_combined_patches(view: &impl MainViewReceiver, combined_patches: &Vec<CombinedPatch>) -> Result<(), failure::Error> {
-			view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
+			view.show_combined_patches(combined_patches.iter().cloned().collect())
 		}
 
 		match command {
@@ -131,6 +132,10 @@ impl MainModel {
 				state.conflicts.clear();
 				MainModel::get_branches_and_commits(view, state)?;
 			}
+			Command::UpdatePatches(patches) => {
+				state.combined_patches = patches;
+				view.show_combined_patches(state.combined_patches.iter().cloned().collect());
+			}
 		}
 		Ok(())
 	}
@@ -158,7 +163,7 @@ impl MainModel {
 			commits.push(commit);
 		}
 		view.show_commits(commits)?;
-		view.show_combined_patches(combined_patches.iter().map(|patch| patch.info.clone()).collect())
+		view.show_combined_patches(combined_patches.iter().cloned().collect())
 	}
 
 	fn apply_existing_patches(view: &impl MainViewReceiver, state: &mut State, branch_under_update: &str, starting_target_commit: Option<String>, resume_previous_operation: bool) -> Result<(), failure::Error> {
@@ -306,6 +311,10 @@ impl MainModel {
 		self.base.send(Command::SwitchToBranch(String::from(ref_name)));
 	}
 
+	pub fn update_patches(&self, patches: Vec<CombinedPatch>) {
+		self.base.send(Command::UpdatePatches(patches));
+	}
+
 	pub fn repo_dir(&self) -> &Path {
 		&self.repo_dir
 	}
@@ -320,7 +329,7 @@ enum MainModelError {
 pub trait MainViewReceiver: View {
 	fn show_branches(&self, branches: Vec<BranchItem>) -> Result<(), failure::Error>;
 	fn show_commits(&self, commits: Vec<Commit>) -> Result<(), failure::Error>;
-	fn show_combined_patches(&self, combined_patches: Vec<ChangeSetInfo>) -> Result<(), failure::Error>;
+	fn show_combined_patches(&self, combined_patches: Vec<CombinedPatch>) -> Result<(), failure::Error>;
 	fn resolve_rejects(&self) -> Result<(), failure::Error>;
 	fn notify_conflicts(&self) -> Result<(), failure::Error>;
 }
