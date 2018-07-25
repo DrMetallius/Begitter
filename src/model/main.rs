@@ -134,7 +134,7 @@ impl MainModel {
 			}
 			Command::UpdatePatches(patches) => {
 				state.combined_patches = patches;
-				view.show_combined_patches(state.combined_patches.iter().cloned().collect());
+				view.show_combined_patches(state.combined_patches.iter().cloned().collect())?;
 			}
 		}
 		Ok(())
