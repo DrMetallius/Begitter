@@ -9,6 +9,7 @@ extern crate libc;
 extern crate winapi;
 extern crate core;
 extern crate time;
+extern crate uuid;
 
 mod ui;
 
