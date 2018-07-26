@@ -5,18 +5,24 @@ use uuid::Uuid;
 use winapi::shared::basetsd::INT_PTR;
 use winapi::shared::windef::HWND;
 use winapi::shared::minwindef::{LPARAM, UINT, WPARAM, TRUE, FALSE, HIWORD, DWORD};
-use winapi::um::winuser::{self, WM_APP, PostMessageW, DialogBoxParamW};
+use winapi::um::winuser::{self, WM_APP, PostMessageW, DialogBoxParamW, CB_RESETCONTENT, GetDlgItem, CB_ADDSTRING, CB_SETCURSEL, CB_GETCURSEL, CB_ERR};
+use winapi::um::winuser::LB_RESETCONTENT;
+use winapi::um::winuser::LB_ADDSTRING;
 use winapi::ctypes::c_int;
-use winapi::um::winuser::{CB_RESETCONTENT, GetDlgItem, CB_ADDSTRING, CB_SETCURSEL, CB_GETCURSEL, CB_ERR};
 
 use ui::windows::utils::close_dialog;
 use ui::windows::helpers::{to_wstring, WinApiError, MessageData};
 use begitter::model::patches::{PatchesModel, PatchesViewReceiver, TargetSide};
 use begitter::model::View;
 use begitter::change_set::CombinedPatch;
+use begitter::patch_editor::patch::Change;
+use std::iter::Map;
+use std::collections::HashMap;
 
 const ID_LEFT_PATCHES_COMBO_BOX: c_int = 10;
 const ID_RIGHT_PATCHES_COMBO_BOX: c_int = 11;
+const ID_LEFT_PATCHES_LIST_BOX: c_int = 12;
+const ID_RIGHT_PATCHES_LIST_BOX: c_int = 13;
 
 const MESSAGE_MODEL_TO_PATCHES_VIEW: UINT = WM_APP;
 
@@ -26,11 +32,14 @@ pub struct PatchesView {
 	patches_model: PatchesModel<PatchesViewRelay>,
 	patches_window: HWND,
 
+	patches: HashMap<Uuid, CombinedPatch>,
 	patches_left: Vec<Uuid>,
 	patches_right: Vec<Uuid>,
 
 	left_patches_combo_box: HWND,
 	right_patches_combo_box: HWND,
+	left_patches_list_box: HWND,
+	right_patches_list_box: HWND,
 }
 
 impl PatchesView {
@@ -44,10 +53,13 @@ impl PatchesView {
 		Ok(PatchesView {
 			patches_model,
 			patches_window,
+			patches: HashMap::new(),
 			patches_left: Vec::new(),
 			patches_right: Vec::new(),
 			left_patches_combo_box: try_get!(GetDlgItem(patches_window, ID_LEFT_PATCHES_COMBO_BOX)),
 			right_patches_combo_box: try_get!(GetDlgItem(patches_window, ID_RIGHT_PATCHES_COMBO_BOX)),
+			left_patches_list_box: try_get!(GetDlgItem(patches_window, ID_LEFT_PATCHES_LIST_BOX)),
+			right_patches_list_box: try_get!(GetDlgItem(patches_window, ID_RIGHT_PATCHES_LIST_BOX)),
 		})
 	}
 
@@ -56,35 +68,8 @@ impl PatchesView {
 			MESSAGE_MODEL_TO_PATCHES_VIEW => {
 				let message = *unsafe { Box::from_raw(message_data.l_param as *mut PatchesViewMessage) };
 				match message {
-					PatchesViewMessage::ViewPatches(patches, left_patch, right_patch) => {
-						let fill_out = |combo_box: HWND, selected_id: Option<Uuid>, skipped_id: Option<Uuid>| -> Result<Vec<Uuid>, WinApiError> {
-							try_send_message!(combo_box, CB_RESETCONTENT, 0, 0);
-
-							let mut ids = Vec::new();
-							for &(uuid, ref patch) in &patches {
-								if let Some(skipped_id) = skipped_id {
-									if skipped_id == uuid {
-										continue;
-									}
-								}
-
-								let string = to_wstring(&patch.info.message);
-								try_send_message!(combo_box, CB_ADDSTRING, 0, string.as_ptr() as LPARAM);
-
-								ids.push(uuid);
-							}
-
-							if let Some(selected_id) = selected_id {
-								let position = ids.iter().position(|uuid| *uuid == selected_id).unwrap();
-								try_send_message!(combo_box, CB_SETCURSEL, position as WPARAM, 0);
-							}
-
-							return Ok(ids);
-						};
-
-						self.patches_left = fill_out(self.left_patches_combo_box, left_patch, None)?;
-						self.patches_right = fill_out(self.right_patches_combo_box, right_patch, left_patch)?;
-					}
+					PatchesViewMessage::ViewCombinedPatches(patches, left_patch, right_patch) => self.view_combined_patches(patches, &left_patch, &right_patch)?,
+					PatchesViewMessage::ViewPatches(patch, target_side) => self.view_patches(patch, target_side)?
 				}
 				true
 			}
@@ -116,6 +101,67 @@ impl PatchesView {
 			_ => false
 		};
 		Ok(handled)
+	}
+
+	fn view_combined_patches(&mut self, patches: Vec<(Uuid, CombinedPatch)>, left_patch: &Option<Uuid>, right_patch: &Option<Uuid>) -> Result<(), WinApiError> {
+		{
+			let fill_out = |combo_box: HWND, selected_id: &Option<Uuid>, skipped_id: &Option<Uuid>| -> Result<Vec<Uuid>, WinApiError> {
+				try_send_message!(combo_box, CB_RESETCONTENT, 0, 0);
+
+				let mut ids = Vec::new();
+				for (uuid, patch) in &patches {
+					if let Some(skipped_id) = *skipped_id {
+						if skipped_id == *uuid {
+							continue;
+						}
+					}
+
+					let string = to_wstring(&patch.info.message);
+					try_send_message!(combo_box, CB_ADDSTRING, 0, string.as_ptr() as LPARAM);
+
+					ids.push(*uuid);
+				}
+
+				if let Some(selected_id) = selected_id {
+					let position = ids.iter().position(|uuid| *uuid == *selected_id).unwrap();
+					try_send_message!(combo_box, CB_SETCURSEL, position as WPARAM, 0);
+				}
+
+				return Ok(ids);
+			};
+
+			self.patches_left = fill_out(self.left_patches_combo_box, left_patch, &None)?;
+			self.patches_right = fill_out(self.right_patches_combo_box, right_patch, left_patch)?;
+		}
+
+		self.patches = patches.into_iter().collect();
+
+		Ok(())
+	}
+
+	fn view_patches(&self, combined_patch_id: Option<Uuid>, target_side: TargetSide) -> Result<(), WinApiError> {
+		let list_box = match target_side {
+			TargetSide::Left => self.left_patches_list_box,
+			TargetSide::Right => self.right_patches_list_box,
+		};
+
+		try_send_message!(list_box, LB_RESETCONTENT, 0, 0);
+
+		if let Some(ref combined_patch_id) = combined_patch_id {
+			let combined_patch = &self.patches[combined_patch_id];
+			for patch in &combined_patch.patches {
+				let (change_str, properties) = match patch.change {
+					Change::Addition { ref new_properties, .. } => ("+", new_properties),
+					Change::Removal { ref old_properties, .. } => ("-", old_properties),
+					Change::Modification { ref new_properties, .. } => ("~", new_properties)
+				};
+				let name = to_wstring(&format!("{} {}", change_str, &properties.name));
+
+				try_send_message!(list_box, LB_ADDSTRING, 0, name.as_ptr() as LPARAM);
+			}
+		}
+
+		Ok(())
 	}
 }
 
@@ -157,7 +203,8 @@ pub extern "system" fn patches_dialog_proc(hwnd_dlg: HWND, message: UINT, w_para
 }
 
 enum PatchesViewMessage {
-	ViewPatches(Vec<(Uuid, CombinedPatch)>, Option<Uuid>, Option<Uuid>)
+	ViewCombinedPatches(Vec<(Uuid, CombinedPatch)>, Option<Uuid>, Option<Uuid>),
+	ViewPatches(Option<Uuid>, TargetSide),
 }
 
 struct PatchesViewRelay {
@@ -183,7 +230,11 @@ impl View for PatchesViewRelay {
 }
 
 impl PatchesViewReceiver for PatchesViewRelay {
-	fn view_patches(&self, patches: Vec<(Uuid, CombinedPatch)>, left_side_patch: Option<Uuid>, right_side_patch: Option<Uuid>) -> Result<(), failure::Error> {
-		self.post_on_main_thread(PatchesViewMessage::ViewPatches(patches, left_side_patch, right_side_patch)).map_err(|err| err.into())
+	fn view_combined_patches(&self, patches: Vec<(Uuid, CombinedPatch)>, left_side_patch: Option<Uuid>, right_side_patch: Option<Uuid>) -> Result<(), failure::Error> {
+		self.post_on_main_thread(PatchesViewMessage::ViewCombinedPatches(patches, left_side_patch, right_side_patch)).map_err(|err| err.into())
+	}
+
+	fn view_patches(&self, patch: Option<Uuid>, target_side: TargetSide) -> Result<(), failure::Error> {
+		self.post_on_main_thread(PatchesViewMessage::ViewPatches(patch, target_side)).map_err(|err| err.into())
 	}
 }
