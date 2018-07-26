@@ -117,7 +117,12 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 				.map(|(&uuid, patch)| (uuid, patch.clone()))
 				.collect::<Vec<_>>();
 		entries.sort_by_key(|&(id, _)| id);
-		self.view.view_patches(entries, self.left.selected_combined_patch, self.right.selected_combined_patch)
+
+		self.view.view_combined_patches(entries, self.left.selected_combined_patch, self.right.selected_combined_patch)?;
+		self.view.view_patches(self.left.selected_combined_patch, TargetSide::Left)?;
+		self.view.view_patches(self.right.selected_combined_patch, TargetSide::Right)?;
+
+		Ok(())
 	}
 
 	pub fn transfer_all_changes(&mut self, direction: TargetSide) -> Result<(), HunkTransferringError> {
@@ -203,7 +208,8 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 }
 
 pub trait PatchesViewReceiver: View {
-	fn view_patches(&self, patches: Vec<(Uuid, CombinedPatch)>, left_side_patch: Option<Uuid>, right_side_patch: Option<Uuid>) -> Result<(), failure::Error>;
+	fn view_combined_patches(&self, patches: Vec<(Uuid, CombinedPatch)>, left_side_patch: Option<Uuid>, right_side_patch: Option<Uuid>) -> Result<(), failure::Error>;
+	fn view_patches(&self, patch: Option<Uuid>, target_side: TargetSide) -> Result<(), failure::Error>;
 }
 
 #[derive(Fail, Debug)]
