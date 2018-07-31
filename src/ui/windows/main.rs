@@ -32,17 +32,16 @@ use winapi::shared::windowsx::{GET_X_LPARAM, GET_Y_LPARAM};
 use super::helpers::*;
 use begitter::model::main::{BranchItem, MainModel, MainViewReceiver};
 use begitter::model::View;
-use begitter::change_set::{Commit, ChangeSetInfo};
+use begitter::change_set::Commit;
+use begitter::change_set::CombinedPatch;
 use ui::windows::text::{load_string, STRING_MAIN_PATCHES_COLUMNS, STRING_MAIN_WINDOW_NAME, STRING_MAIN_BRANCHES, STRING_MAIN_PATCHES,
 	STRING_MAIN_COMMITS, STRING_MAIN_COMMITS_COLUMNS, format_time, STRING_MAIN_ABORT, STRING_MAIN_RESOLVE_REJECTS,
-	STRING_MAIN_RESOLVE_CONFLICTS};
+	STRING_MAIN_RESOLVE_CONFLICTS, STRING_MAIN_EDIT};
 use ui::windows::utils::{set_fonts, get_window_position, insert_columns_into_list_view, insert_rows_into_list_view, close_dialog,
 	get_dialog_field_text, get_window_client_area, set_dialog_field_text, show_context_menu};
 use ui::windows::dpi::GetDpiForWindow;
 use ui::windows::rejects::RejectsView;
 use ui::windows::patches::PatchesView;
-use begitter::change_set::CombinedPatch;
-use ui::windows::text::STRING_MAIN_EDIT;
 
 const MAIN_CLASS: &str = "main";
 
