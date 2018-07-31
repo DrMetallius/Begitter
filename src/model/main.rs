@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use failure::{self, Backtrace};
 
 use git::{self, Git, PatchApplicationMode};
-use change_set::{Commit, CombinedPatch, ChangeSetInfo};
+use change_set::{Commit, CombinedPatch};
 use patch_editor::parser::parse_combined_patch;
 use model::{Model, View};
 

@@ -8,7 +8,7 @@ use std::fmt::Formatter;
 use std::fmt;
 
 use time::{self, Timespec};
-use failure::{self, Backtrace};
+use failure;
 use nom::ErrorKind;
 
 use patch_editor::patch::{Patch, Change, ModificationType, OverlappingHunkError};

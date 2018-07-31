@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::ops::Range;
-use std::io::Write;
-use std::io::Error;
+use std::io::{Write, Error};
 use std::borrow::{Borrow, Cow};
 
 const FILE_NAME_PLACEHOLDER: &str = "/dev/null";
@@ -269,10 +268,14 @@ fn range_to_str(range: &Range<usize>) -> String {
 }
 
 impl Hunk {
-	fn write<W: Write>(&self, write: &mut W) -> Result<(), Error> {
+	pub fn header(&self) -> String {
 		let old_file_range_str = range_to_str(&self.old_file_range);
 		let new_file_range_str = range_to_str(&self.new_file_range);
-		let header = format!("@@ -{} +{} @@\n", old_file_range_str, new_file_range_str);
+		format!("@@ -{} +{} @@\n", old_file_range_str, new_file_range_str)
+	}
+
+	fn write<W: Write>(&self, write: &mut W) -> Result<(), Error> {
+		let header = self.header();
 
 		write.write_all(header.as_bytes())?;
 		write.write_all(&self.data)?;

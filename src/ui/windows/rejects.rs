@@ -17,6 +17,7 @@ use begitter::model::View;
 use begitter::patch_editor::patch::Hunk;
 use ui::windows::helpers::from_wstring;
 use ui::windows::text::{load_string, STRING_REJECTS_UNACCEPT_HUNK, STRING_REJECTS_ACCEPT_HUNK};
+use ui::windows::text::binary_to_text;
 
 const ID_REJECTS_FILES_LISTBOX: c_int = 3;
 const ID_REJECTS_HUNKS_LISTBOX: c_int = 4;
@@ -36,7 +37,7 @@ enum RejectsViewMessage {
 	ShowHunks(Vec<(Arc<Hunk>, bool)>),
 	ShowFileData(Arc<Vec<u8>>, usize),
 	ShowActiveHunk(Arc<Hunk>, usize),
-	Finish
+	Finish,
 }
 
 pub struct RejectsView {
@@ -50,7 +51,8 @@ pub struct RejectsView {
 	hunk_edit_text: HWND,
 	save_and_quit_button: HWND,
 
-	files: Vec<(String, bool)>, // TODO: but do we need it as a field? Same for the main view, actually
+	files: Vec<(String, bool)>,
+	// TODO: but do we need it as a field? Same for the main view, actually
 	hunks: Vec<(Arc<Hunk>, bool)>,
 }
 
@@ -148,17 +150,13 @@ impl RejectsView {
 		};
 
 		fn set_edit_text_contents(handle: HWND, data: &Vec<u8>) -> Result<(), WinApiError> {
-			let mut raw_text = match String::from_utf8(data.clone()) {
+			let raw_text = match binary_to_text(data) {
 				Ok(text) => text,
 				Err(err) => {
 					println!("Couldn't read the file text: {:?}", err); // TODO: this isn't proper handling
 					return Ok(());
 				}
 			};
-
-			if !raw_text.contains("\r\n") && raw_text.contains("\n") { // TODO: this should be rolled back
-				raw_text = raw_text.replace("\n", "\r\n");
-			}
 			let text = to_wstring(&raw_text);
 			try_call!(SetWindowTextW(handle, text.as_ptr() as *const _ as *const _), 0);
 

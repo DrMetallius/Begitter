@@ -1,6 +1,7 @@
 use std::ptr::null_mut;
 use std::slice::from_raw_parts;
 use std::ops::Range;
+use std::string::FromUtf8Error;
 
 use time;
 use winapi::shared::minwindef::UINT;
@@ -42,4 +43,14 @@ pub fn load_string(id: UINT) -> Result<Vec<u16>, WinApiError> {
 
 pub fn format_time(time_spec: time::Timespec) -> String {
 	time::strftime("%Y-%m-%d %H:%M:%S", &time::at(time_spec)).unwrap()
+}
+
+pub fn binary_to_text(data: &Vec<u8>) -> Result<String, FromUtf8Error> {
+	let mut raw_text = String::from_utf8(data.clone())?;
+
+	if !raw_text.contains("\r\n") && raw_text.contains("\n") { // TODO: this should be rolled back
+		raw_text = raw_text.replace("\n", "\r\n");
+	}
+
+	Ok(raw_text)
 }

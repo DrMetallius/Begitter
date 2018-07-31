@@ -5,8 +5,8 @@ use uuid::{Uuid, UuidVersion};
 use failure;
 
 use model::View;
-use patch_editor::patch::{Change, ModificationType, OverlappingHunkError};
-use change_set::{AbsorbtionError, CombinedPatch};
+use patch_editor::patch::OverlappingHunkError;
+use change_set::CombinedPatch;
 
 macro_rules! check_presence {
 	($($var:ident), *) => {
@@ -91,7 +91,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 		}
 	}
 
-	pub fn update_selection(&mut self, target_side: TargetSide, selection: Uuid) -> Result<(), failure::Error> {
+	pub fn update_combined_patch_selection(&mut self, target_side: TargetSide, selection: Uuid) -> Result<(), failure::Error> {
 		{
 			let (side, other_side) = match target_side {
 				TargetSide::Left => (&mut self.left, &mut self.right),
@@ -111,6 +111,18 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 		self.show_patches()
 	}
 
+	pub fn update_patch_selection(&mut self, target_side: TargetSide, selection: usize) -> Result<(), failure::Error> {
+		{
+			let side = match target_side {
+				TargetSide::Left => &mut self.left,
+				TargetSide::Right => &mut self.right,
+			};
+			side.selected_patch = Some(selection);
+		}
+
+		self.show_hunks(target_side)
+	}
+
 	fn show_patches(&self) -> Result<(), failure::Error> {
 		let mut entries = self.patches
 				.iter()
@@ -122,7 +134,26 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 		self.view.view_patches(self.left.selected_combined_patch, TargetSide::Left)?;
 		self.view.view_patches(self.right.selected_combined_patch, TargetSide::Right)?;
 
+		self.show_hunks(TargetSide::Left)?;
+		self.show_hunks(TargetSide::Right)?;
+
 		Ok(())
+	}
+
+	fn show_hunks(&self, target_side: TargetSide) -> Result<(), failure::Error> {
+		let side = match target_side {
+			TargetSide::Left => &self.left,
+			TargetSide::Right => &self.right,
+		};
+
+		let mut combined_patch_id_and_patch_pos = None;
+		if let Some(id) = side.selected_combined_patch {
+			if let Some(pos) = side.selected_patch {
+				combined_patch_id_and_patch_pos = Some((id, pos))
+			}
+		}
+
+		self.view.view_hunks(combined_patch_id_and_patch_pos, target_side)
 	}
 
 	pub fn transfer_all_changes(&mut self, direction: TargetSide) -> Result<(), HunkTransferringError> {
@@ -210,6 +241,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 pub trait PatchesViewReceiver: View {
 	fn view_combined_patches(&self, patches: Vec<(Uuid, CombinedPatch)>, left_side_patch: Option<Uuid>, right_side_patch: Option<Uuid>) -> Result<(), failure::Error>;
 	fn view_patches(&self, patch: Option<Uuid>, target_side: TargetSide) -> Result<(), failure::Error>;
+	fn view_hunks(&self, combined_patch_id_and_patch_pos: Option<(Uuid, usize)>, target_side: TargetSide) -> Result<(), failure::Error>;
 }
 
 #[derive(Fail, Debug)]
