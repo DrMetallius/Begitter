@@ -25,10 +25,23 @@ use begitter::model::patches::{PatchesModel, PatchesViewReceiver, TargetSide};
 use begitter::model::View;
 use begitter::change_set::CombinedPatch;
 use begitter::patch_editor::patch::Change;
+use winapi::um::winuser::BM_GETCHECK;
+use winapi::um::winuser::BST_CHECKED;
+use winapi::um::winuser::LB_GETSELCOUNT;
+use winapi::um::winuser::LB_GETSELITEMS;
 
 const HUNKS_CLASS: &str = "hunks";
 static mut CLASS_REGISTERED: bool = false;
 
+const ID_LEFT_DELETE_HUNKS_BUTTON: c_int = 1;
+const ID_LEFT_MOVE_ALL_FILES_BUTTON: c_int = 2;
+const ID_LEFT_MOVE_SELECTED_FILES_BUTTON: c_int = 3;
+const ID_LEFT_MOVE_SELECTED_HUNKS_BUTTON: c_int = 4;
+const ID_RIGHT_DELETE_HUNKS_BUTTON: c_int = 5;
+const ID_RIGHT_MOVE_ALL_FILES_BUTTON: c_int = 6;
+const ID_RIGHT_MOVE_SELECTED_FILES_BUTTON: c_int = 7;
+const ID_RIGHT_MOVE_SELECTED_HUNKS_BUTTON: c_int = 8;
+const ID_NEW_PATCH_BUTTON: c_int = 9;
 const ID_LEFT_PATCHES_COMBO_BOX: c_int = 10;
 const ID_RIGHT_PATCHES_COMBO_BOX: c_int = 11;
 const ID_LEFT_PATCHES_LIST_BOX: c_int = 12;
@@ -52,6 +65,9 @@ pub struct PatchesView {
 	right_patches_list_box: HWND,
 	left_hunks_window: HWND,
 	right_hunks_window: HWND,
+
+	left_hunks_checkboxes: Vec<HWND>,
+	right_hunks_checkboxes: Vec<HWND>,
 }
 
 impl PatchesView {
@@ -122,6 +138,8 @@ impl PatchesView {
 			right_patches_list_box: try_get!(GetDlgItem(patches_window, ID_RIGHT_PATCHES_LIST_BOX)),
 			left_hunks_window,
 			right_hunks_window,
+			left_hunks_checkboxes: Vec::new(),
+			right_hunks_checkboxes: Vec::new(),
 		})
 	}
 
@@ -132,52 +150,151 @@ impl PatchesView {
 				match message {
 					PatchesViewMessage::ViewCombinedPatches(patches, left_patch, right_patch) => self.view_combined_patches(patches, &left_patch, &right_patch)?,
 					PatchesViewMessage::ViewPatches(patch, target_side) => self.view_patches(patch, target_side)?,
-					PatchesViewMessage::ViewHunks(combined_patch_id_and_patch_pos, target_side) => self.view_hunks(combined_patch_id_and_patch_pos, target_side)?
+					PatchesViewMessage::ViewHunks(combined_patch_id, patch_pos, target_side) => self.view_hunks(combined_patch_id, patch_pos, target_side)?
 				}
 				true
 			}
 			winuser::WM_COMMAND => {
+				let notification = HIWORD(message_data.w_param as DWORD);
+				let control_id = LOWORD(message_data.w_param as DWORD) as c_int;
 				let control_handle = message_data.l_param as HWND;
+
 				if control_handle == self.left_patches_combo_box || control_handle == self.right_patches_combo_box {
-					match HIWORD(message_data.w_param as DWORD) {
-						winuser::CBN_SELCHANGE => {
-							let selection = try_send_message!(control_handle, CB_GETCURSEL, 0, 0);
-							if selection == CB_ERR {
-								panic!("No item is selected, yet the selection change message arrived");
-							}
-
-							let (target_side, patches_list) = if control_handle == self.left_patches_combo_box {
-								(TargetSide::Left, &self.patches_left)
-							} else {
-								(TargetSide::Right, &self.patches_right)
-							};
-
-							self.patches_model.update_combined_patch_selection(target_side, patches_list[selection as usize])?;
-							true
+					if notification == winuser::CBN_SELCHANGE {
+						let selection = try_send_message!(control_handle, CB_GETCURSEL, 0, 0);
+						if selection == CB_ERR {
+							panic!("No item is selected, yet the selection change message arrived");
 						}
-						_ => false
+
+						let (target_side, patches_list) = if control_handle == self.left_patches_combo_box {
+							(TargetSide::Left, &self.patches_left)
+						} else {
+							(TargetSide::Right, &self.patches_right)
+						};
+
+						self.patches_model.update_combined_patch_selection(target_side, patches_list[selection as usize])?;
+						true
+					} else {
+						false
 					}
 				} else if control_handle == self.left_patches_list_box || control_handle == self.right_patches_list_box {
-					match HIWORD(message_data.w_param as DWORD) {
-						winuser::LBN_SELCHANGE => {
-							let selection = try_send_message!(control_handle, LB_GETCURSEL, 0, 0);
-							if selection == LB_ERR {
-								panic!("No item is selected, yet the selection change message arrived");
-							}
+					if notification == winuser::LBN_SELCHANGE {
+						let selection = try_send_message!(control_handle, LB_GETCURSEL, 0, 0);
+						if selection == LB_ERR {
+							panic!("No item is selected, yet the selection change message arrived");
+						}
 
-							let target_side = if control_handle == self.left_patches_list_box { TargetSide::Left } else { TargetSide::Right };
-							self.patches_model.update_patch_selection(target_side, selection as usize)?;
+						let target_side = if control_handle == self.left_patches_list_box { TargetSide::Left } else { TargetSide::Right };
+						self.patches_model.update_patch_selection(target_side, selection as usize)?;
+						true
+					} else {
+						false
+					}
+				} else {
+					match control_id {
+						ID_LEFT_DELETE_HUNKS_BUTTON if notification == winuser::BN_CLICKED => {
+							let hunks = self.get_selected_hunks(TargetSide::Left)?;
+							self.patches_model.delete_hunks(TargetSide::Left, hunks.into_iter())?;
+							true
+						}
+						ID_LEFT_MOVE_ALL_FILES_BUTTON if notification == winuser::BN_CLICKED => {
+							self.transfer_all_changes(TargetSide::Right);
+							true
+						}
+						ID_LEFT_MOVE_SELECTED_FILES_BUTTON if notification == winuser::BN_CLICKED => {
+							self.move_selected_patches(TargetSide::Right)?;
+							true
+						}
+						ID_LEFT_MOVE_SELECTED_HUNKS_BUTTON if notification == winuser::BN_CLICKED => {
+							self.move_selected_hunks(TargetSide::Right)?;
+							true
+						}
+						ID_RIGHT_DELETE_HUNKS_BUTTON if notification == winuser::BN_CLICKED => {
+							let hunks = self.get_selected_hunks(TargetSide::Right)?;
+							self.patches_model.delete_hunks(TargetSide::Right, hunks.into_iter())?;
+							true
+						}
+						ID_RIGHT_MOVE_ALL_FILES_BUTTON if notification == winuser::BN_CLICKED => {
+							self.transfer_all_changes(TargetSide::Left);
+							true
+						}
+						ID_RIGHT_MOVE_SELECTED_FILES_BUTTON if notification == winuser::BN_CLICKED => {
+							self.move_selected_patches(TargetSide::Left)?;
+							true
+						}
+						ID_RIGHT_MOVE_SELECTED_HUNKS_BUTTON if notification == winuser::BN_CLICKED => {
+							self.move_selected_hunks(TargetSide::Left)?;
+							true
+						}
+						ID_NEW_PATCH_BUTTON => {
+							self.patches_model.new_patch()?;
 							true
 						}
 						_ => false
 					}
-				} else {
-					false
 				}
 			}
 			_ => false
 		};
 		Ok(handled)
+	}
+
+	fn transfer_all_changes(&mut self, target_side: TargetSide) {
+		let result = self.patches_model.transfer_all_changes(target_side);
+		if result.is_err() {
+			println!("Couldn't transfer the hunks"); // TODO: not real error handling
+		}
+	}
+
+	fn move_selected_patches(&mut self, target_side: TargetSide) -> Result<(), WinApiError> {
+		let source_patches_list_box = match target_side {
+			TargetSide::Left => &self.right_patches_list_box,
+			TargetSide::Right => &self.left_patches_list_box
+		};
+		let selected_positions_count = try_send_message!(*source_patches_list_box, LB_GETSELCOUNT, 0, 0);
+		if selected_positions_count == LB_ERR {
+			return Ok(())
+		}
+
+		let mut patch_positions_buf= vec![0 as c_int; selected_positions_count as usize];
+		try_send_message!(*source_patches_list_box, LB_GETSELITEMS, selected_positions_count as WPARAM, patch_positions_buf.as_mut_ptr() as LPARAM);
+
+		let patch_positions = patch_positions_buf.into_iter().map(|pos| pos as usize).collect::<Vec<usize>>();
+
+		let result = self.patches_model.transfer_changes(target_side, &patch_positions);
+		if result.is_err() {
+			println!("Couldn't transfer the hunks"); // TODO: not real error handling
+		}
+
+		Ok(())
+	}
+
+	fn move_selected_hunks(&mut self, target_side: TargetSide) -> Result<(), WinApiError> {
+		let source_side = match target_side {
+			TargetSide::Left => TargetSide::Right,
+			TargetSide::Right => TargetSide::Left
+		};
+		let hunks = self.get_selected_hunks(source_side)?;
+
+		let result = self.patches_model.transfer_hunks(target_side, hunks.into_iter());
+		if result.is_err() {
+			println!("Couldn't transfer the hunks"); // TODO: not real error handling
+		}
+
+		Ok(())
+	}
+
+	fn get_selected_hunks(&self, target_side: TargetSide) -> Result<Vec<usize>, WinApiError> {
+		let checkboxes = match target_side {
+			TargetSide::Left => &self.left_hunks_checkboxes,
+			TargetSide::Right => &self.right_hunks_checkboxes
+		};
+
+		let positions = checkboxes.iter().enumerate().filter(|(_, checkbox)| {
+			try_send_message!(**checkbox, BM_GETCHECK, 0, 0) as WPARAM == BST_CHECKED
+		}).map(|(position, _)| position).collect();
+
+		Ok(positions)
 	}
 
 	fn receive_hunks_window_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
@@ -334,13 +451,13 @@ impl PatchesView {
 		Ok(())
 	}
 
-	fn view_hunks(&self, combined_patch_id_and_patch_pos: Option<(Uuid, usize)>, target_side: TargetSide) -> Result<(), WinApiError> {
-		let (list_box, hunks_window) = match target_side {
-			TargetSide::Left => (self.left_patches_list_box, self.left_hunks_window),
-			TargetSide::Right => (self.right_patches_list_box, self.right_hunks_window)
+	fn view_hunks(&mut self, combined_patch_id: Option<Uuid>, patch_pos: Option<usize>, target_side: TargetSide) -> Result<(), WinApiError> {
+		let (list_box, hunks_window, hunks_checkboxes) = match target_side {
+			TargetSide::Left => (self.left_patches_list_box, self.left_hunks_window, &mut self.left_hunks_checkboxes),
+			TargetSide::Right => (self.right_patches_list_box, self.right_hunks_window, &mut self.right_hunks_checkboxes)
 		};
 
-		let pos = combined_patch_id_and_patch_pos.map_or(-1isize as WPARAM, |value| value.1);
+		let pos = patch_pos.unwrap_or(-1isize as WPARAM);
 		try_send_message!(list_box, LB_SETCURSEL, pos, 0);
 
 		extern "system" fn enum_child_windows_callback(hwnd: HWND, _: LPARAM) -> BOOL {
@@ -359,84 +476,89 @@ impl PatchesView {
 			EnumChildWindows(hunks_window, Some(enum_child_windows_callback), 0);
 		}
 
-		if let Some((combined_patch_id, pos)) = combined_patch_id_and_patch_pos {
-			let patch = &self.patches[&combined_patch_id].patches[pos];
-			match patch.change {
-				Change::Addition { .. } | Change::Removal { .. } => return Ok(()),
-				_ => ()
-			}
+		hunks_checkboxes.clear();
 
-			let window_area = get_window_client_area(hunks_window)?;
+		if let Some(combined_patch_id) = combined_patch_id {
+			if let Some(pos) = patch_pos {
+				let patch = &self.patches[&combined_patch_id].patches[pos];
+				match patch.change {
+					Change::Addition { .. } | Change::Removal { .. } => return Ok(()),
+					_ => ()
+				}
 
-			let static_class = to_wstring(WC_STATIC);
-			let button_class = to_wstring("Button");
-			let mut top = 0;
-			let mut right = 0;
-			for hunk in &patch.hunks {
-				try_get!(CreateWindowExW(0, button_class.as_ptr(), null(), BS_AUTOCHECKBOX | WS_VISIBLE | WS_CLIPCHILDREN | WS_CHILD,
-					4, top, 16, 16, hunks_window, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+				let window_area = get_window_client_area(hunks_window)?;
 
-				let hunk_text = match binary_to_text(&hunk.data) {
-					Ok(text) => text,
-					Err(err) => {
-						println!("Couldn't read the file text: {:?}", err); // TODO: this isn't proper handling
-						return Ok(());
-					}
-				};
-				let text = format!("{}\r\n{}", hunk.header(), hunk_text);
+				let static_class = to_wstring(WC_STATIC);
+				let button_class = to_wstring("Button");
+				let mut top = 0;
+				let mut right = 0;
+				for hunk in &patch.hunks {
+					let checkbox = try_get!(CreateWindowExW(0, button_class.as_ptr(), null(), BS_AUTOCHECKBOX | WS_VISIBLE | WS_CLIPCHILDREN | WS_CHILD,
+						4, top, 16, 16, hunks_window, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+					hunks_checkboxes.push(checkbox);
 
-				let context = try_call!(GetDC(hunks_window), null_mut());
-				let line_sizes = text.split("\r\n").map(|line| {
-					let mut size = SIZE {
+					let hunk_text = match binary_to_text(&hunk.data) {
+						Ok(text) => text,
+						Err(err) => {
+							println!("Couldn't read the file text: {:?}", err); // TODO: this isn't proper handling
+							return Ok(());
+						}
+					};
+					let text = format!("{}\r\n{}", hunk.header(), hunk_text);
+
+					let context = try_call!(GetDC(hunks_window), null_mut());
+					let line_sizes = text.split("\r\n").map(|line| {
+						let mut size = SIZE {
+							cx: 0,
+							cy: 0,
+						};
+						let line = to_wstring(&line);
+						try_call!(GetTextExtentPoint32W(context, line.as_ptr(), line.len() as c_int, &mut size as LPSIZE), FALSE);
+
+						Ok(size)
+					}).collect::<Result<Vec<_>, WinApiError>>()?;
+
+					let longest_line_size = line_sizes.iter().fold(&SIZE {
 						cx: 0,
 						cy: 0,
-					};
-					let line = to_wstring(&line);
-					try_call!(GetTextExtentPoint32W(context, line.as_ptr(), line.len() as c_int, &mut size as LPSIZE), FALSE);
+					}, |longest_size, size| if longest_size.cx < size.cx { size } else { longest_size });
 
-					Ok(size)
-				}).collect::<Result<Vec<_>, WinApiError>>()?;
+					let text = to_wstring(&text);
+					let text_height = longest_line_size.cy * line_sizes.len() as c_int;
+					let hunk_window = try_get!(CreateWindowExW(0, static_class.as_ptr(), null(), SS_LEFTNOWORDWRAP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CHILD,
+						24, top, longest_line_size.cx, text_height, hunks_window, 0 as HMENU, 0 as HINSTANCE, null_mut()));
+					try_send_message!(hunk_window, WM_SETTEXT, 0, text.as_ptr() as LPARAM);
 
-				let longest_line_size = line_sizes.iter().fold(&SIZE {
-					cx: 0,
-					cy: 0,
-				}, |longest_size, size| if longest_size.cx < size.cx { size } else { longest_size });
+					top += text_height;
+					right = max(right, longest_line_size.cx);
+				}
 
-				let text = to_wstring(&text);
-				let text_height = longest_line_size.cy * line_sizes.len() as c_int;
-				let hunk_window = try_get!(CreateWindowExW(0, static_class.as_ptr(), null(), SS_LEFTNOWORDWRAP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CHILD,
-					24, top, longest_line_size.cx, text_height, hunks_window, 0 as HMENU, 0 as HINSTANCE, null_mut()));
-				try_send_message!(hunk_window, WM_SETTEXT, 0, text.as_ptr() as LPARAM);
+				set_fonts(self.patches_window)?;
 
-				top += text_height;
-				right = max(right, longest_line_size.cx);
-			}
+				let vert_scroll_info = SCROLLINFO {
+					cbSize: mem::size_of::<SCROLLINFO>() as UINT,
+					fMask: SIF_PAGE | SIF_POS | SIF_RANGE,
+					nMin: 0,
+					nMax: top - 1,
+					nPage: (window_area.bottom - window_area.top) as UINT,
+					nPos: 0,
+					nTrackPos: 0,
+				};
 
-			set_fonts(self.patches_window)?;
+				let hor_scroll_info = SCROLLINFO {
+					cbSize: mem::size_of::<SCROLLINFO>() as UINT,
+					fMask: SIF_PAGE | SIF_POS | SIF_RANGE,
+					nMin: 0,
+					nMax: right - 1,
+					nPage: (window_area.right - window_area.left) as UINT,
+					nPos: 0,
+					nTrackPos: 0,
+				};
 
-			let vert_scroll_info = SCROLLINFO {
-				cbSize: mem::size_of::<SCROLLINFO>() as UINT,
-				fMask: SIF_PAGE | SIF_POS | SIF_RANGE,
-				nMin: 0,
-				nMax: top - 1,
-				nPage: (window_area.bottom - window_area.top) as UINT,
-				nPos: 0,
-				nTrackPos: 0,
-			};
-
-			let hor_scroll_info = SCROLLINFO {
-				cbSize: mem::size_of::<SCROLLINFO>() as UINT,
-				fMask: SIF_PAGE | SIF_POS | SIF_RANGE,
-				nMin: 0,
-				nMax: right - 1,
-				nPage: (window_area.right - window_area.left) as UINT,
-				nPos: 0,
-				nTrackPos: 0,
-			};
-
-			unsafe {
-				SetScrollInfo(hunks_window, SB_VERT as c_int, &vert_scroll_info as *const _ as LPSCROLLINFO, TRUE);
-				SetScrollInfo(hunks_window, SB_HORZ as c_int, &hor_scroll_info as *const _ as LPSCROLLINFO, TRUE);
+				unsafe {
+					SetScrollInfo(hunks_window, SB_VERT as c_int, &vert_scroll_info as *const _ as LPSCROLLINFO, TRUE);
+					SetScrollInfo(hunks_window, SB_HORZ as c_int, &hor_scroll_info as *const _ as LPSCROLLINFO, TRUE);
+				}
 			}
 		}
 
@@ -516,7 +638,7 @@ pub extern "system" fn hunks_window_proc(h_wnd: HWND, message: UINT, w_param: WP
 enum PatchesViewMessage {
 	ViewCombinedPatches(Vec<(Uuid, CombinedPatch)>, Option<Uuid>, Option<Uuid>),
 	ViewPatches(Option<Uuid>, TargetSide),
-	ViewHunks(Option<(Uuid, usize)>, TargetSide),
+	ViewHunks(Option<Uuid>, Option<usize>, TargetSide),
 }
 
 struct PatchesViewRelay {
@@ -550,7 +672,7 @@ impl PatchesViewReceiver for PatchesViewRelay {
 		self.post_on_main_thread(PatchesViewMessage::ViewPatches(patch, target_side)).map_err(|err| err.into())
 	}
 
-	fn view_hunks(&self, combined_patch_id_and_patch_pos: Option<(Uuid, usize)>, target_side: TargetSide) -> Result<(), failure::Error> {
-		self.post_on_main_thread(PatchesViewMessage::ViewHunks(combined_patch_id_and_patch_pos, target_side)).map_err(|err| err.into())
+	fn view_hunks(&self, combined_patch_id: Option<Uuid>, patch_pos: Option<usize>, target_side: TargetSide) -> Result<(), failure::Error> {
+		self.post_on_main_thread(PatchesViewMessage::ViewHunks(combined_patch_id, patch_pos, target_side)).map_err(|err| err.into())
 	}
 }
