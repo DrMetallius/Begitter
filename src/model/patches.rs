@@ -16,6 +16,7 @@ macro_rules! check_presence {
 	};
 }
 
+#[derive(Copy, Clone)]
 pub enum TargetSide {
 	Left,
 	Right,
@@ -98,6 +99,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 				TargetSide::Right => (&mut self.right, &mut self.left)
 			};
 			side.selected_combined_patch = Some(selection);
+			side.selected_patch = None;
 
 			if side.selected_combined_patch == other_side.selected_combined_patch {
 				let other_patch = self.patches
@@ -105,6 +107,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 						.map(|(&uuid, _)| uuid)
 						.find(|&uuid| uuid != side.selected_combined_patch.unwrap());
 				other_side.selected_combined_patch = other_patch;
+				other_side.selected_patch = None;
 			}
 		}
 
@@ -146,17 +149,10 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 			TargetSide::Right => &self.right,
 		};
 
-		let mut combined_patch_id_and_patch_pos = None;
-		if let Some(id) = side.selected_combined_patch {
-			if let Some(pos) = side.selected_patch {
-				combined_patch_id_and_patch_pos = Some((id, pos))
-			}
-		}
-
-		self.view.view_hunks(combined_patch_id_and_patch_pos, target_side)
+		self.view.view_hunks(side.selected_combined_patch, side.selected_patch, target_side)
 	}
 
-	pub fn transfer_all_changes(&mut self, direction: TargetSide) -> Result<(), HunkTransferringError> {
+	pub fn transfer_all_changes(&mut self, direction: TargetSide) -> Result<(), failure::Error> {
 		let (Side { selected_combined_patch: source, .. }, Side { selected_combined_patch: destination, .. }) = self.get_sides_by_target_side(direction);
 		check_presence!(source, destination);
 
@@ -180,10 +176,12 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 			_ => ()
 		}
 
+		self.show_patches()?;
+
 		Ok(())
 	}
 
-	pub fn transfer_changes(&mut self, direction: TargetSide, patch_positions: &[usize]) -> Result<(), HunkTransferringError> {
+	pub fn transfer_changes(&mut self, direction: TargetSide, patch_positions: &[usize]) -> Result<(), failure::Error> {
 		let (Side { selected_combined_patch: source, .. }, Side { selected_combined_patch: destination, .. }) = self.get_sides_by_target_side(direction);
 		check_presence!(source, destination);
 
@@ -200,10 +198,12 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 			_ => ()
 		}
 
+		self.show_patches()?;
+
 		Ok(())
 	}
 
-	pub fn transfer_hunks(&mut self, direction: TargetSide, hunks: impl Iterator<Item=usize>) -> Result<(), HunkTransferringError> {
+	pub fn transfer_hunks(&mut self, direction: TargetSide, hunks: impl Iterator<Item=usize>) -> Result<(), failure::Error> {
 		let (Side { selected_combined_patch: source_id, selected_patch: source_patch_pos },
 			Side { selected_combined_patch: destination_id, .. }) = self.get_sides_by_target_side(direction);
 		check_presence!(source_id, source_patch_pos, destination_id);
@@ -214,7 +214,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 			let found_destination_patch = {
 				let source_patch_file_name = match source_patch.get_edit_patch_file_name() {
 					Some(name) => name,
-					None => return Err(HunkTransferringError::SourcePatchIsNotModification)
+					None => return Err(HunkTransferringError::SourcePatchIsNotModification.into())
 				};
 
 				let destination_combined_patch = self.patches.get_mut(&destination_id).unwrap();
@@ -225,7 +225,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 
 			let destination_patch = match found_destination_patch {
 				Some(patch) => patch,
-				None => return Err(HunkTransferringError::DestinationPatchNotFoundOrNotModification)
+				None => return Err(HunkTransferringError::DestinationPatchNotFoundOrNotModification.into())
 			};
 
 			source_patch.move_hunks_to(&hunks.collect::<Vec<_>>(), destination_patch) // TODO: can't we muff the original patch here? Check it
@@ -233,6 +233,35 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 		self.patches.insert(source_id, source_combined_patch);
 
 		result?;
+		self.show_patches()?;
+
+		Ok(())
+	}
+
+	pub fn delete_hunks(&mut self, target_side: TargetSide, hunks: impl Iterator<Item=usize>) -> Result<(), failure::Error> {
+		let (_, Side { selected_combined_patch: id, selected_patch: patch_pos }) = self.get_sides_by_target_side(target_side);
+		check_presence!(id, patch_pos);
+
+		{
+			let patches = &mut self.patches.get_mut(&id).unwrap().patches[patch_pos];
+			patches.remove_hunks(&hunks.collect::<Vec<usize>>());
+		}
+
+		self.show_hunks(target_side)?;
+
+		Ok(())
+	}
+
+	pub fn new_patch(&mut self) -> Result<(), failure::Error> {
+		if let Some(ref id) = self.left.selected_combined_patch {
+			let info = self.patches[id].info.clone();
+			self.patches.insert(Uuid::new(UuidVersion::Random).unwrap(), CombinedPatch {
+				info,
+				patches: Vec::new()
+			});
+
+			self.show_patches()?;
+		}
 
 		Ok(())
 	}
@@ -241,7 +270,7 @@ impl<T: PatchesViewReceiver> PatchesModel<T> {
 pub trait PatchesViewReceiver: View {
 	fn view_combined_patches(&self, patches: Vec<(Uuid, CombinedPatch)>, left_side_patch: Option<Uuid>, right_side_patch: Option<Uuid>) -> Result<(), failure::Error>;
 	fn view_patches(&self, patch: Option<Uuid>, target_side: TargetSide) -> Result<(), failure::Error>;
-	fn view_hunks(&self, combined_patch_id_and_patch_pos: Option<(Uuid, usize)>, target_side: TargetSide) -> Result<(), failure::Error>;
+	fn view_hunks(&self, combined_patch_id: Option<Uuid>, patch_pos: Option<usize>, target_side: TargetSide) -> Result<(), failure::Error>;
 }
 
 #[derive(Fail, Debug)]

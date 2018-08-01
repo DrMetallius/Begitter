@@ -7,7 +7,7 @@ use failure;
 use ui::windows::helpers::{MessageData, to_wstring, WinApiError};
 use ui::windows::utils::close_dialog;
 use winapi::um::winuser::{self, DialogBoxParamW, GetDlgItem, LB_ADDSTRING, LB_ERR, LB_ERRSPACE, LB_RESETCONTENT, PostMessageW, SetWindowTextW, WM_APP,
-	LB_SETCURSEL, LBN_SELCHANGE, LB_GETCURSEL, GetWindowTextW, GetWindowTextLengthW, EnableWindow, BN_CLICKED};
+	LB_SETCURSEL, LB_GETCURSEL, GetWindowTextW, GetWindowTextLengthW, EnableWindow};
 use winapi::shared::minwindef::{FALSE, LPARAM, TRUE, UINT, WPARAM, LOWORD, DWORD, HIWORD};
 use winapi::ctypes::c_int;
 use winapi::shared::{basetsd::INT_PTR, windef::HWND, ntdef::PWSTR, ntdef::WCHAR};
@@ -80,10 +80,13 @@ impl RejectsView {
 	}
 
 	fn receive_message(&mut self, message_data: &MessageData) -> Result<bool, WinApiError> {
-		Ok(match message_data.message {
-			winuser::WM_COMMAND if HIWORD(message_data.w_param as DWORD) == LBN_SELCHANGE => {
-				match LOWORD(message_data.w_param as DWORD) as c_int {
-					ID_REJECTS_FILES_LISTBOX => {
+		let handled = match message_data.message {
+			winuser::WM_COMMAND => {
+				let notification = HIWORD(message_data.w_param as DWORD);
+				let control_id = LOWORD(message_data.w_param as DWORD) as c_int;
+
+				match control_id {
+					ID_REJECTS_FILES_LISTBOX if notification == winuser::LBN_SELCHANGE => {
 						let new_file = try_send_message!(self.files_list_box, LB_GETCURSEL, 0, 0);
 						if new_file < 0 {
 							false
@@ -93,7 +96,7 @@ impl RejectsView {
 							true
 						}
 					}
-					ID_REJECTS_HUNKS_LISTBOX => {
+					ID_REJECTS_HUNKS_LISTBOX if notification == winuser::LBN_SELCHANGE => {
 						let new_hunk = try_send_message!(self.hunks_list_box, LB_GETCURSEL, 0, 0);
 						if new_hunk < 0 {
 							false
@@ -102,12 +105,7 @@ impl RejectsView {
 							true
 						}
 					}
-					_ => false
-				}
-			}
-			winuser::WM_COMMAND if HIWORD(message_data.w_param as DWORD) == BN_CLICKED => {
-				match LOWORD(message_data.w_param as DWORD) as c_int {
-					ID_REJECTS_ACCEPT_BUTTON => {
+					ID_REJECTS_ACCEPT_BUTTON if notification == winuser::BN_CLICKED => {
 						let file_pos = try_send_message!(self.files_list_box, LB_GETCURSEL, 0, 0);
 						let hunk_pos = try_send_message!(self.hunks_list_box, LB_GETCURSEL, 0, 0);
 						if file_pos >= 0 && hunk_pos >= 0 {
@@ -115,19 +113,19 @@ impl RejectsView {
 						}
 						true
 					}
-					ID_REJECTS_RESET_BUTTON => {
+					ID_REJECTS_RESET_BUTTON if notification == winuser::BN_CLICKED  => {
 						let file_pos = try_send_message!(self.files_list_box, LB_GETCURSEL, 0, 0);
 						if file_pos >= 0 {
 							self.model.reset(file_pos as usize);
 						}
 						true
 					}
-					ID_REJECTS_SAVE_AND_QUIT_BUTTON => {
+					ID_REJECTS_SAVE_AND_QUIT_BUTTON if notification == winuser::BN_CLICKED => {
 						self.save_changes_to_current_file()?;
 						self.model.save_and_quit();
 						true
 					}
-					ID_REJECTS_ABORT_BUTTON => {
+					ID_REJECTS_ABORT_BUTTON if notification == winuser::BN_CLICKED => {
 						let result = Box::into_raw(Box::new(None::<Vec<String>>));
 						close_dialog(self.rejects_window, result as INT_PTR)?;
 						true
@@ -140,7 +138,9 @@ impl RejectsView {
 				true
 			}
 			_ => false
-		})
+		};
+
+		Ok(handled)
 	}
 
 	fn receive_model_message_on_main_thread(&mut self, message_data: &MessageData) -> Result<(), WinApiError> {
