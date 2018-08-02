@@ -12,7 +12,8 @@ use winapi::um::winuser::{self, WM_APP, PostMessageW, DialogBoxParamW, CB_RESETC
 	WNDCLASSW, DefWindowProcW, RegisterClassW, CreateWindowExW, WS_VISIBLE, WS_CLIPCHILDREN, WS_CHILD, WS_HSCROLL, WS_VSCROLL, LB_RESETCONTENT,
 	LB_ADDSTRING, SCROLLINFO, WS_BORDER, MapDialogRect, LB_SETCURSEL, EnumChildWindows, DestroyWindow, BS_AUTOCHECKBOX, WM_SETTEXT, SS_LEFTNOWORDWRAP,
 	GetDC, SIF_ALL, SetScrollInfo, SB_VERT, LPSCROLLINFO, RedrawWindow, RDW_INVALIDATE, RDW_ERASE, UpdateWindow, BeginPaint, FillRect, COLOR_WINDOW,
-	EndPaint, PAINTSTRUCT, LPPAINTSTRUCT, SIF_POS, GetScrollInfo, ScrollWindowEx, SW_SCROLLCHILDREN, SIF_RANGE, SIF_PAGE, SB_HORZ, LB_ERR, LB_GETCURSEL};
+	EndPaint, PAINTSTRUCT, LPPAINTSTRUCT, SIF_POS, GetScrollInfo, ScrollWindowEx, SW_SCROLLCHILDREN, SIF_RANGE, SIF_PAGE, SB_HORZ, LB_ERR, LB_GETCURSEL,
+	BM_GETCHECK, BST_CHECKED, LB_GETSELCOUNT, LB_GETSELITEMS, BM_SETCHECK, BST_UNCHECKED};
 use winapi::ctypes::c_int;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::commctrl::WC_STATIC;
@@ -25,10 +26,6 @@ use begitter::model::patches::{PatchesModel, PatchesViewReceiver, TargetSide};
 use begitter::model::View;
 use begitter::change_set::CombinedPatch;
 use begitter::patch_editor::patch::Change;
-use winapi::um::winuser::BM_GETCHECK;
-use winapi::um::winuser::BST_CHECKED;
-use winapi::um::winuser::LB_GETSELCOUNT;
-use winapi::um::winuser::LB_GETSELITEMS;
 
 const HUNKS_CLASS: &str = "hunks";
 static mut CLASS_REGISTERED: bool = false;
@@ -46,6 +43,10 @@ const ID_LEFT_PATCHES_COMBO_BOX: c_int = 10;
 const ID_RIGHT_PATCHES_COMBO_BOX: c_int = 11;
 const ID_LEFT_PATCHES_LIST_BOX: c_int = 12;
 const ID_RIGHT_PATCHES_LIST_BOX: c_int = 13;
+const ID_LEFT_ALL_HUNKS_BUTTON: c_int = 15;
+const ID_LEFT_NO_HUNKS_BUTTON: c_int = 16;
+const ID_RIGHT_ALL_HUNKS_BUTTON: c_int = 18;
+const ID_RIGHT_NO_HUNKS_BUTTON: c_int = 19;
 
 const MESSAGE_MODEL_TO_PATCHES_VIEW: UINT = WM_APP;
 
@@ -226,8 +227,32 @@ impl PatchesView {
 							self.move_selected_hunks(TargetSide::Left)?;
 							true
 						}
-						ID_NEW_PATCH_BUTTON => {
+						ID_NEW_PATCH_BUTTON if notification == winuser::BN_CLICKED  => {
 							self.patches_model.new_patch()?;
+							true
+						}
+						ID_LEFT_ALL_HUNKS_BUTTON  if notification == winuser::BN_CLICKED => {
+							for &checkbox in &self.left_hunks_checkboxes {
+								try_send_message!(checkbox, BM_SETCHECK, BST_CHECKED, 0);
+							}
+							true
+						}
+						ID_LEFT_NO_HUNKS_BUTTON  if notification == winuser::BN_CLICKED => {
+							for &checkbox in &self.left_hunks_checkboxes {
+								try_send_message!(checkbox, BM_SETCHECK, BST_UNCHECKED, 0);
+							}
+							true
+						}
+						ID_RIGHT_ALL_HUNKS_BUTTON  if notification == winuser::BN_CLICKED => {
+							for &checkbox in &self.right_hunks_checkboxes {
+								try_send_message!(checkbox, BM_SETCHECK , BST_CHECKED, 0);
+							}
+							true
+						}
+						ID_RIGHT_NO_HUNKS_BUTTON  if notification == winuser::BN_CLICKED => {
+							for &checkbox in &self.right_hunks_checkboxes {
+								try_send_message!(checkbox, BM_SETCHECK , BST_UNCHECKED, 0);
+							}
 							true
 						}
 						_ => false
